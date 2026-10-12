@@ -7,7 +7,7 @@
  * 安全規則在 1.01academy repo 的 firestore.rules。
  */
 // 這個網站的 Firestore 集合名稱
-const COL = { courses: 'islam_courses', videos: 'islam_courseVideos', enroll: 'islam_enroll', prefs: 'islam_prefs', students: 'islam_students', notes: 'islam_notes', posts: 'islam_posts', counts: 'islam_counts', counted: 'islam_counted', stats: 'islam_stats', articles: 'islam_articles' };
+const COL = { courses: 'islam_courses', videos: 'islam_courseVideos', enroll: 'islam_enroll', prefs: 'islam_prefs', students: 'islam_students', notes: 'islam_notes', posts: 'islam_posts', counts: 'islam_counts', counted: 'islam_counted', stats: 'islam_stats', articles: 'islam_articles', blog: 'islam_blog' };
 const FIREBASE = 'https://www.gstatic.com/firebasejs/10.12.2/';
 const CONFIG = window.SITE_CONFIG || {};
 const configured = !!(CONFIG.firebaseConfig && CONFIG.firebaseConfig.apiKey);
@@ -365,7 +365,7 @@ function renderHeader() {
     // 標誌：往上的階梯（循序漸進）
     `<a href="#/" class="logo"><span class="logo-mark" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18"><path fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" d="M4 19h5v-5h5V9h5V5"/></svg></span>${esc(CONFIG.siteName || '循序漸進學伊斯蘭')}</a>` +
     '<nav>' +
-    '<a href="#/">學習地圖</a>' +
+    '<a href="#/">學習地圖</a><a href="#/articles">文章</a>' +
     (user
       ? `<a href="#/my">我的學習區</a>${isAdmin() ? '<a href="#/admin">管理</a>' : ''}<a class="muted small user-name" href="#/account" title="帳號設定（${esc(user.email)}）">${esc(name)}</a><button class="link" id="logout">登出</button>`
       : '<a href="#/login" class="btn btn-sm">登入</a>') +
@@ -426,6 +426,7 @@ pages.home = (app) => {
     '<div class="path" id="list"></div>' +
     (hidden.length ? '<h3 class="muted">不公開的課程（只有管理者看得到這個列表）</h3><div class="path">' + hidden.map((c) => row(c, 0)).join('') + '</div>' : '') +
     '</section>' +
+    '<section class="container" id="home-blog" hidden></section>' +
     '<section class="container home-faq"><h2>常見問題</h2>' + faqList(SITE_PAGES.faq.slice(0, 5)) +
     '<p><a class="link" href="#/faq">查看全部常見問題 →</a></p></section>';
 
@@ -449,6 +450,206 @@ pages.home = (app) => {
     if (e.target.closest('[data-stop]')) { e.preventDefault(); go('/login?next=/'); }
   };
   draw();
+  // 最新文章（有發布的文章才顯示）
+  loadBlog().then((list) => {
+    const box = app.querySelector('#home-blog');
+    const latest = list.filter((a) => a.published).slice(0, 3);
+    if (!box || !latest.length) return;
+    box.innerHTML = '<div class="row-between"><h2>最新文章</h2><a class="link" href="#/articles">查看全部文章 →</a></div>' +
+      '<div class="blog-grid">' + latest.map(blogCard).join('') + '</div>';
+    box.hidden = false;
+  });
+};
+
+/* ---------------- 文章（獨立於課程） ----------------
+ * islam_blog/{文章id} = { title, summary, category, cover, url, text, published, createdAt, updatedAt }
+ * 已發布的文章任何人都看得到；草稿只有管理者看得到 */
+let blogCache = null, blogFor = null;
+async function loadBlog(force = false) {
+  const who = isAdmin() ? 'admin' : 'public';
+  if (!force && blogCache && blogFor === who) return blogCache;
+  try {
+    const col = fb.collection(db, COL.blog);
+    const snap = await fb.getDocs(isAdmin() ? col : fb.query(col, fb.where('published', '==', true)));
+    blogCache = snap.docs.map((d) => ({ ...d.data(), id: d.id }))
+      .filter((a) => a.published || isAdmin())
+      .sort((x, y) => (y.createdAt || 0) - (x.createdAt || 0));
+    blogFor = who;
+  } catch (e) {
+    console.error(e);
+    blogCache = blogCache || [];
+  }
+  return blogCache;
+}
+const findPost = (id) => (blogCache || []).find((a) => a.id === id);
+const hostOf = (u) => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch (e) { return ''; } };
+const blogCard = (a) =>
+  `<a class="card blog-card" href="#/article/${a.id}">` +
+  (a.cover ? `<div class="thumb"><img src="${esc(a.cover)}" alt="${esc(a.title)}" loading="lazy"></div>` : '') +
+  '<div class="pad">' +
+  `<span class="tag">${[a.category, fmtDate(a.createdAt), a.published ? '' : '草稿'].filter(Boolean).map(esc).join(' · ')}</span>` +
+  `<h3>${esc(a.title)}</h3>` +
+  (a.summary ? `<p class="muted small">${esc(a.summary)}</p>` : '') +
+  (a.url && !a.text ? `<p class="muted small">${ICON.fileText} 來源：${esc(hostOf(a.url))}</p>` : '') +
+  '</div></a>';
+
+pages.articles = async (app) => {
+  app.innerHTML = '<div class="container"><p class="muted">載入文章中…</p></div>';
+  const list = await loadBlog();
+  if (!document.body.contains(app)) return;
+  const cats = categoriesOf(list);
+  let cat = '', q = '';
+  app.innerHTML = '<div class="container"><div class="row-between"><h1>文章</h1>' +
+    (isAdmin() ? '<a class="btn btn-sm" href="#/admin/article/new">＋ 新增文章</a>' : '') + '</div>' +
+    '<input class="input" id="aq" type="search" placeholder="搜尋文章…" autocomplete="off"/>' +
+    (cats.length ? '<div class="chips" id="achips"><button class="chip" data-cat="">全部</button>' +
+      cats.map((c) => `<button class="chip" data-cat="${esc(c)}">${esc(c)}</button>`).join('') + '</div>' : '') +
+    '<div class="blog-grid" id="alist"></div></div>';
+  const draw = () => {
+    app.querySelectorAll('[data-cat]').forEach((b) => b.classList.toggle('active', b.dataset.cat === cat));
+    const words = q.split(/\s+/).filter(Boolean);
+    const shown = list.filter((a) => (!cat || a.category === cat) &&
+      words.every((w) => [a.title, a.summary, a.category, a.text].join(' ').toLowerCase().includes(w)));
+    app.querySelector('#alist').innerHTML = !list.length ? '<p class="muted">文章準備中，敬請期待。</p>'
+      : shown.length ? shown.map(blogCard).join('') : '<p class="muted">找不到符合的文章。</p>';
+  };
+  app.querySelector('#aq').oninput = (e) => { q = e.target.value.trim().toLowerCase(); draw(); };
+  const chips = app.querySelector('#achips');
+  if (chips) chips.onclick = (e) => { if (e.target.dataset.cat != null) { cat = e.target.dataset.cat; draw(); } };
+  draw();
+};
+
+pages.article = async (app, id) => {
+  app.innerHTML = '<div class="container"><p class="muted">載入文章中…</p></div>';
+  await loadBlog();
+  let a = findPost(id);
+  if (!a) { // 可能是剛發布或還沒載入的文章
+    try { const snap = await fb.getDoc(fb.doc(db, COL.blog, id)); if (snap.exists()) a = { ...snap.data(), id }; } catch (e) { /* 草稿或不存在 */ }
+  }
+  if (!document.body.contains(app)) return;
+  if (!a || (!a.published && !isAdmin())) return notFound(app);
+  app.innerHTML = '<div class="container narrow blog-page">' +
+    '<a href="#/articles" class="muted small">← 全部文章</a>' +
+    (isAdmin() ? ` · <a href="#/admin/article/${a.id}" class="link small">✎ 編輯此文章</a>` + (a.published ? '' : ' <span class="tag">（草稿）</span>') : '') +
+    `<p class="tag">${[a.category, fmtDate(a.createdAt)].filter(Boolean).map(esc).join(' · ')}</p>` +
+    `<h1 dir="auto">${esc(a.title)}</h1>` +
+    (a.summary ? `<p class="lead muted" dir="auto">${esc(a.summary)}</p>` : '') +
+    (a.cover ? `<img class="blog-cover" src="${esc(a.cover)}" alt="${esc(a.title)}">` : '') +
+    `<div class="lesson-article">${articleHtml({ text: a.text, url: a.url })}</div>` +
+    '<p class="center"><a class="btn btn-ghost btn-sm" href="#/articles">← 回到全部文章</a></p></div>';
+};
+
+// 文章管理（管理者）
+pages.blogAdmin = async (app) => {
+  app.innerHTML = '<div class="container"><p class="muted">載入中…</p></div>';
+  const list = await loadBlog(true);
+  if (!document.body.contains(app)) return;
+  app.innerHTML = '<div class="container">' + adminTabs('articles') +
+    '<div class="row-between"><h1>文章管理</h1><a class="btn btn-sm" href="#/admin/article/new">＋ 新增文章</a></div>' +
+    '<p class="muted small">文章獨立於課程，顯示在網站上方的「文章」頁，首頁也會列出最新 3 篇。已發布的文章不用登入就能閱讀。</p>' +
+    (list.length ? '<div class="admin-list">' + list.map((a) =>
+      `<div class="card admin-row blog-row"><div class="pad"><strong>${esc(a.title)}</strong>` +
+      `<p class="muted small">${[a.category, fmtDate(a.createdAt), a.published ? '已發布' : '草稿'].filter(Boolean).map(esc).join(' · ')}</p>` +
+      `<div class="lesson-nav"><a class="btn btn-sm" href="#/admin/article/${a.id}">編輯</a><a class="btn btn-ghost btn-sm" href="#/article/${a.id}">查看</a></div></div></div>`).join('') + '</div>'
+      : '<p class="muted">還沒有文章，按「＋ 新增文章」開始寫第一篇。</p>') + '</div>';
+};
+
+pages.blogEdit = async (app, id) => {
+  const isNew = !id || id === 'new';
+  await loadBlog(true);
+  const src = isNew ? null : findPost(id);
+  if (!isNew && !src) return notFound(app);
+  if (!document.body.contains(app)) return;
+  const a = isNew
+    ? { id: newId('a'), title: '', summary: '', category: '', cover: '', url: '', text: '', published: false, createdAt: Date.now() }
+    : { summary: '', category: '', cover: '', url: '', text: '', ...src };
+  const field = (label, name, val, attrs = '') => `<label>${label}<input class="input" name="${name}" value="${esc(val)}" ${attrs}/></label>`;
+  function draw() {
+    app.innerHTML = `<div class="container editor"><a href="#/admin/articles" class="muted small">← 文章管理</a><h1>${isNew ? '新增文章' : '編輯文章'}</h1>` +
+      '<form id="ae" novalidate><div class="card pad">' +
+      field('標題', 'title', a.title, 'required maxlength="200"') +
+      field('摘要 <span class="muted small">顯示在文章列表，可留空</span>', 'summary', a.summary, 'maxlength="300"') +
+      field('分類 <span class="muted small">可留空，例如：信仰、生活、節日</span>', 'category', a.category) +
+      `<label class="check"><input type="checkbox" name="published" ${a.published ? 'checked' : ''}/> 發布（取消勾選則是草稿，只有管理者看得到）</label></div>` +
+      '<div class="card pad"><h3>封面照片 <span class="muted small">可留空</span></h3>' +
+      (a.cover ? `<img class="blog-cover" src="${esc(a.cover)}" alt=""><button type="button" class="btn btn-ghost btn-sm" id="cover-remove">移除封面照片</button>` : '') +
+      '<label>上傳封面照片 <span class="muted small">建議 16:9 橫向圖片，會自動裁切成 960×540</span><input class="input" type="file" accept="image/*" id="cover-file"/></label></div>' +
+      '<div class="card pad"><h3>內容</h3><p class="muted small">可以貼外部文章連結、自己寫內容，或兩者都放（連結的文章顯示在上方）。</p>' +
+      field('文章連結 <span class="muted small">可留空。貼上外部文章網址，讀者會在網站上直接看到這篇文章</span>', 'url', a.url, 'placeholder="https://…"') +
+      `<label>文章內容 <span class="muted small">可留空。支援 # 標題、**粗體**、- 清單、&gt; 引用、[文字](網址)、![說明](圖片網址)</span>` +
+      `<textarea class="input textarea" name="text" rows="14" placeholder="在這裡寫文章內容…">${esc(a.text)}</textarea></label>` +
+      `<details class="article-preview" id="apv" ${a.text ? '' : 'hidden'} open><summary class="small">預覽</summary><div class="article">${renderArticle(a.text)}</div></details></div>` +
+      '<div class="editor-actions"><span class="autosave muted small" id="autosave">修改後會自動儲存</span>' +
+      '<button class="btn" id="save">完成，查看文章 →</button>' +
+      '<button type="button" class="btn btn-ghost" id="del">刪除文章</button></div></form></div>';
+  }
+  function collect() {
+    const f = app.querySelector('#ae');
+    if (!f) return;
+    a.title = f.title.value.trim();
+    a.summary = f.summary.value.trim();
+    a.category = f.category.value.trim();
+    a.published = f.published.checked;
+    a.url = f.url.value.trim();
+    a.text = f.text.value.replace(/\s+$/, '');
+  }
+  let timer = 0, chain = Promise.resolve(), created = !isNew;
+  const setStatus = (t, warn = false) => { const el = app.querySelector('#autosave'); if (el) { el.textContent = t; el.classList.toggle('expired', warn); } };
+  function autosave(delay) { clearTimeout(timer); setStatus('編輯中…'); timer = setTimeout(() => { saveNow(); }, delay); }
+  function saveNow() {
+    clearTimeout(timer); timer = 0;
+    collect();
+    const problem = !a.title ? '請輸入標題，才會自動儲存'
+      : a.url && !/^https?:\/\/\S+$/i.test(a.url) ? '文章連結要以 https:// 開頭'
+      : !a.url && !a.text ? '請貼上文章連結或寫文章內容' : '';
+    if (problem) { setStatus('⚠ ' + problem, true); return Promise.resolve(false); }
+    const data = { title: a.title, summary: a.summary, category: a.category, cover: a.cover || '', url: a.url, text: a.text, published: a.published, createdAt: a.createdAt || Date.now(), updatedAt: Date.now() };
+    setStatus('儲存中…');
+    chain = chain.then(async () => {
+      await fb.setDoc(fb.doc(db, COL.blog, a.id), data);
+      if (blogCache) { const i = blogCache.findIndex((x) => x.id === a.id); if (i > -1) blogCache[i] = { ...data, id: a.id }; else blogCache.unshift({ ...data, id: a.id }); }
+      if (!created) { created = true; history.replaceState(null, '', '#/admin/article/' + a.id); }
+      setStatus(`✓ 已自動儲存（${fmtTime(Date.now()).slice(-5)}）`);
+      return true;
+    }).catch((err) => { console.error(err); setStatus('⚠ 儲存失敗：' + (err.code || err.message), true); return false; });
+    return chain;
+  }
+  function bind() {
+    const f = app.querySelector('#ae');
+    f.addEventListener('input', (e) => {
+      if (e.target.name === 'text') {
+        const pv = app.querySelector('#apv');
+        pv.hidden = !e.target.value.trim();
+        pv.querySelector('.article').innerHTML = renderArticle(e.target.value);
+      }
+      autosave(1000);
+    });
+    f.addEventListener('change', (e) => { if (e.target.id !== 'cover-file') autosave(300); });
+    const fileInput = app.querySelector('#cover-file');
+    fileInput.onchange = async () => {
+      const file = fileInput.files[0];
+      if (!file) return;
+      try { collect(); a.cover = await resizeCover(file); draw(); bind(); autosave(0); toast('封面已更新'); }
+      catch (e) { toast('無法讀取這張圖片'); }
+    };
+    const rm = app.querySelector('#cover-remove');
+    if (rm) rm.onclick = () => { collect(); a.cover = ''; draw(); bind(); autosave(0); };
+    app.querySelector('#del').onclick = async () => {
+      if (!confirm(`確定刪除「${a.title || '這篇文章'}」？此動作無法復原。`)) return;
+      clearTimeout(timer); timer = 0;
+      try {
+        await chain;
+        await fb.deleteDoc(fb.doc(db, COL.blog, a.id));
+        if (blogCache) blogCache = blogCache.filter((x) => x.id !== a.id);
+        toast('文章已刪除');
+        go('/admin/articles');
+      } catch (err) { toast('刪除失敗：' + (err.code || err.message)); }
+    };
+    f.onsubmit = async (e) => { e.preventDefault(); if (await saveNow()) go('/article/' + a.id); };
+  }
+  window.addEventListener('hashchange', () => { if (timer) saveNow(); }, { once: true });
+  draw();
+  bind();
 };
 
 // 課程介紹頁（公開）
@@ -1139,6 +1340,8 @@ pages.admin = async (app, id, query, sub) => {
   if (!adminGuard(app)) return;
   if (id === 'students') return pages.students(app);
   if (id === 'playlist') return pages.playlist(app);
+  if (id === 'articles') return pages.blogAdmin(app);
+  if (id === 'article') return pages.blogEdit(app, sub);
   if (id) return pages.edit(app, id);
   app.innerHTML = '<div class="container">' + adminTabs('courses') + '<div class="row-between"><h1>課程管理</h1><span class="lesson-nav">' +
     '<a class="btn btn-ghost btn-sm" href="#/admin/playlist">▶ 從播放清單建立</a><a class="btn btn-sm" href="#/admin/new">＋ 新增課程</a></span></div>' +
@@ -1181,6 +1384,7 @@ pages.admin = async (app, id, query, sub) => {
 
 const adminTabs = (cur) => '<div class="chips admin-tabs">' +
   `<a class="chip${cur === 'courses' ? ' active' : ''}" href="#/admin">課程管理（順序 = 學習地圖的階段）</a>` +
+  `<a class="chip${cur === 'articles' ? ' active' : ''}" href="#/admin/articles">文章管理</a>` +
   `<a class="chip${cur === 'students' ? ' active' : ''}" href="#/admin/students">學生名單</a></div>`;
 
 /* ---------------- 從 YouTube 播放清單建立課程（管理者） ----------------
