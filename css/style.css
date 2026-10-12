@@ -313,3 +313,6 @@ table.orders th { font-size: 12px; color: var(--muted); background: var(--soft);
 .post-text { margin-top: 6px; white-space: pre-wrap; word-break: break-word; line-height: 1.7; }
 .post-acts { display: flex; gap: 14px; margin-top: 6px; }
 @media (max-width: 600px) { .post.reply { margin-left: 12px; } }
+
+/* 加入學習人數 */
+.learners { white-space: nowrap; }

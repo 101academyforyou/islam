@@ -7,7 +7,7 @@
  * 安全規則在 1.01academy repo 的 firestore.rules。
  */
 // 這個網站的 Firestore 集合名稱
-const COL = { courses: 'islam_courses', videos: 'islam_courseVideos', enroll: 'islam_enroll', prefs: 'islam_prefs', students: 'islam_students', notes: 'islam_notes', posts: 'islam_posts' };
+const COL = { courses: 'islam_courses', videos: 'islam_courseVideos', enroll: 'islam_enroll', prefs: 'islam_prefs', students: 'islam_students', notes: 'islam_notes', posts: 'islam_posts', counts: 'islam_counts' };
 const FIREBASE = 'https://www.gstatic.com/firebasejs/10.12.2/';
 const CONFIG = window.SITE_CONFIG || {};
 const configured = !!(CONFIG.firebaseConfig && CONFIG.firebaseConfig.apiKey);
@@ -23,6 +23,7 @@ let accessReady = Promise.resolve();
 const videoCache = {};   // 課程 id → { 單元 id: YouTube ID }
 let courses = COURSES;   // 課程目錄：優先讀 Firestore 的 courses 集合，讀不到時用 data.js
 let coursesFromDb = false;
+let joinCount = {};      // 課程 id → 加入學習的人數（islam_counts/{課程id}.n）
 
 /* ---------------- 小工具 ---------------- */
 const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
@@ -178,7 +179,18 @@ async function joinCourse(c, btn, stay = false) {
   btn.disabled = true;
   try {
     const at = Date.now();
-    await fb.setDoc(fb.doc(db, COL.enroll, user.email.toLowerCase(), 'courses', c.id), { joinedAt: at });
+    const ref = fb.doc(db, COL.enroll, user.email.toLowerCase(), 'courses', c.id);
+    // 加入課程時，學習人數 +1（同一個批次寫入，規則才能確認是真的加入）
+    try {
+      const b = fb.writeBatch(db);
+      b.set(ref, { joinedAt: at });
+      b.set(fb.doc(db, COL.counts, c.id), { n: fb.increment(1) }, { merge: true });
+      await b.commit();
+      joinCount[c.id] = (joinCount[c.id] || 0) + 1;
+    } catch (e) {
+      console.warn('人數未更新', e);
+      await fb.setDoc(ref, { joinedAt: at });
+    }
     if (!joined.includes(c.id)) joined.push(c.id);
     joinedAt[c.id] = at;
     syncStudent(true);
@@ -192,7 +204,19 @@ async function joinCourse(c, btn, stay = false) {
 
 // 從我的學習區移除（進度紀錄保留在瀏覽器）
 async function leaveCourse(c) {
-  await fb.deleteDoc(fb.doc(db, COL.enroll, user.email.toLowerCase(), 'courses', c.id));
+  const ref = fb.doc(db, COL.enroll, user.email.toLowerCase(), 'courses', c.id);
+  let counted = false;
+  if (joinCount[c.id] > 0) {
+    try {
+      const b = fb.writeBatch(db);
+      b.delete(ref);
+      b.set(fb.doc(db, COL.counts, c.id), { n: fb.increment(-1) }, { merge: true });
+      await b.commit();
+      joinCount[c.id]--;
+      counted = true;
+    } catch (e) { console.warn('人數未更新', e); }
+  }
+  if (!counted) await fb.deleteDoc(ref);
   joined = joined.filter((id) => id !== c.id);
   delete joinedAt[c.id];
   syncStudent(true);
@@ -213,6 +237,7 @@ async function saveArea(order, folders) {
 
 // 從 Firestore 讀取課程目錄；資料庫還沒有課程時，沿用 data.js
 async function loadCourses() {
+  const counts = loadCounts();
   try {
     const snap = await fb.getDocs(fb.collection(db, COL.courses));
     if (!snap.empty) {
@@ -223,7 +248,18 @@ async function loadCourses() {
   } catch (e) {
     console.error(e);
   }
+  await counts;
 }
+
+// 每門課加入學習的人數（任何人都看得到）
+async function loadCounts() {
+  try {
+    const snap = await fb.getDocs(fb.collection(db, COL.counts));
+    joinCount = {};
+    snap.docs.forEach((d) => { joinCount[d.id] = Math.max(0, Number(d.data().n) || 0); });
+  } catch (e) { console.error(e); }
+}
+const countText = (c) => joinCount[c.id] > 0 ? `<span class="learners">👥 ${joinCount[c.id].toLocaleString()} 人加入學習</span>` : '';
 
 async function loadVideos(courseId) {
   if (videoCache[courseId]) return videoCache[courseId];
@@ -302,7 +338,7 @@ pages.home = (app) => {
     `<span class="step-no">${n ? n : '–'}</span>${thumb(c)}<div class="step-body">` +
     `<span class="tag">${[n ? `第 ${n} 階段` : '', c.category, c.level, c.unlisted ? '不公開' : '', c.published === false ? '未上架' : ''].filter(Boolean).map(esc).join(' · ')}</span>` +
     `<h3>${esc(c.title)}</h3>` + (c.subtitle ? `<p class="muted small">${esc(c.subtitle)}</p>` : '') +
-    `<p class="muted small">${lessonsOf(c).length} 個單元${minutesText(c)}</p>` +
+    `<p class="muted small">${lessonsOf(c).length} 個單元${minutesText(c)}${joinCount[c.id] > 0 ? ' · ' + countText(c) : ''}</p>` +
     `<div class="step-foot">${statusOf(c) || '<span class="price free">免費</span>'}${joinBtn(c)}</div></div></a>`;
   app.innerHTML =
     '<section class="hero"><div class="container">' +
@@ -382,7 +418,7 @@ pages.course = (app, id) => {
       '</div>').join('') +
     '<h2 id="talk">💬 心得分享與交流</h2><div class="talk" id="posts"></div>' +
     '</div>' +
-    `<aside class="card buy">${thumb(c)}<div class="pad">${box}</div></aside></div>`;
+    `<aside class="card buy">${thumb(c)}<div class="pad">${box}${countText(c) ? `<p class="muted small center">${countText(c)}</p>` : ''}</div></aside></div>`;
   const joinBtn = app.querySelector('#join');
   if (joinBtn) joinBtn.onclick = () => joinCourse(c, joinBtn);
   renderPosts(app.querySelector('#posts'), c);
@@ -1159,6 +1195,22 @@ pages.playlist = (app) => {
 
 // 學生名單：加入過伊斯蘭網站課程的學生（islam_students），可搜尋、匯出 CSV
 const fmtDate = (ms) => { if (!ms) return ''; const d = new Date(ms); return `${d.getFullYear()}/${pad2(d.getMonth() + 1)}/${pad2(d.getDate())}`; };
+// 依學生名單重新計算每門課的學習人數（管理者打開學生名單時自動校正，例如這個功能上線前就加入的學生）
+async function syncCounts(list) {
+  await loadCounts(); // 以資料庫目前的數字為準
+  const real = {};
+  list.forEach((s) => s.items.forEach((x) => { real[x.id] = (real[x.id] || 0) + 1; }));
+  const ids = new Set([...Object.keys(real), ...Object.keys(joinCount)]);
+  for (const id of ids) {
+    const n = real[id] || 0;
+    if ((joinCount[id] || 0) === n) continue;
+    try {
+      await fb.setDoc(fb.doc(db, COL.counts, id), { n });
+      joinCount[id] = n;
+    } catch (e) { console.error('人數校正失敗', id, e); }
+  }
+}
+
 pages.students = async (app) => {
   if (!adminGuard(app)) return;
   app.innerHTML = '<div class="container"><p class="muted">載入中…</p></div>';
@@ -1175,12 +1227,13 @@ pages.students = async (app) => {
     return;
   }
   if (!document.body.contains(app)) return;
+  syncCounts(list);
   const title = (id) => (findCourse(id) || {}).title || id + '（已刪除的課程）';
   let q = '';
   app.innerHTML = '<div class="container editor">' + adminTabs('students') +
     '<div class="row-between"><h1>學生名單</h1><button type="button" class="btn btn-ghost btn-sm" id="csv">⬇ 匯出 CSV</button></div>' +
     `<p class="muted small">共 ${list.length} 位學生、${list.reduce((n, s) => n + s.items.length, 0)} 筆加入紀錄。依最近加入時間排列。` +
-    '學生加入或移出課程時會自動更新；更新這個功能之前就加入的學生，會在他下次登入網站時出現。</p>' +
+    '學生加入或移出課程時會自動更新，課程顯示的「加入學習人數」也會依這份名單校正；更新這個功能之前就加入的學生，會在他下次登入網站時出現。</p>' +
     '<input class="input" id="sq" type="search" placeholder="搜尋 Email 或姓名" autocomplete="off"/>' +
     '<div id="slist"></div></div>';
   const shown = () => list.filter((s) => !q || (s.email + ' ' + (s.name || '')).toLowerCase().includes(q));
