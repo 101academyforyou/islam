@@ -509,9 +509,9 @@ function renderHeader() {
     // 標誌：往上的階梯（循序漸進）
     `<a href="#/" class="logo"><span class="logo-mark" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18"><path fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" d="M4 19h5v-5h5V9h5V5"/></svg></span>${esc(CONFIG.siteName || '循序漸進學伊斯蘭')}</a>` +
     '<nav>' +
-    '<a href="#/">學習地圖</a><a href="#/articles">文章</a><a href="#/calendar">行事曆</a>' +
+    '<a href="#/">學習地圖</a><a href="#/articles">文章</a>' + (user ? '<a href="#/my">我的學習區</a>' : '') + '<a href="#/calendar">行事曆</a>' +
     (user
-      ? `<a href="#/my">我的學習區</a><a href="#/plan">我的課表</a>${isAdmin() ? '<a href="#/admin">管理</a>' : ''}<a class="muted small user-name" href="#/account" title="帳號設定（${esc(user.email)}）">${esc(name)}</a><button class="link" id="logout">登出</button>`
+      ? `<a href="#/plan">我的課表</a>${isAdmin() ? '<a href="#/admin">管理</a>' : ''}<a class="muted small user-name" href="#/account" title="帳號設定（${esc(user.email)}）">${esc(name)}</a><button class="link" id="logout">登出</button>`
       : '<a href="#/login" class="btn btn-sm">登入</a>') +
     '<button class="icon-btn" id="theme" aria-label="切換深淺色"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></button>' +
     '</nav></div>';
