@@ -327,7 +327,12 @@ async function joinCourse(c, btn, stay = false) {
     if (!joined.includes(c.id)) joined.push(c.id);
     joinedAt[c.id] = at;
     syncStudent(true);
-    toast('已加入我的學習區');
+    // 選擇要放到哪個資料夾（可略過）
+    const folder = await pickFolder(c);
+    if (folder) {
+      try { await fileCourse(c.id, folder); toast(`已加入學習區的「${folder.name}」`); }
+      catch (e) { console.error(e); toast('已加入學習區（資料夾沒有存到，可以到「我的學習區」整理）'); }
+    } else toast('已加入我的學習區');
     if (stay) render(); else go('/learn/' + c.id);
   } catch (err) {
     btn.disabled = false;
@@ -355,6 +360,51 @@ async function saveArea(order, folders) {
   myOrder = order;
   myFolders = folders;
   await fb.setDoc(fb.doc(db, COL.prefs, user.email.toLowerCase()), { order, folders, updatedAt: Date.now() });
+}
+
+// 加入課程後的「放到哪個資料夾」視窗：回傳 { id, name }，選未分類或關閉則回傳 null
+function pickFolder(c) {
+  return new Promise((resolve) => {
+    const box = document.createElement('div');
+    box.className = 'modal-backdrop';
+    const list = () => myFolders.map((f) => `<button type="button" class="folder-pick" data-fid="${esc(f.id)}">📁 ${esc(f.name)}<span class="muted small">${(f.courses || []).length} 門課</span></button>`).join('');
+    const draw = () => {
+      box.innerHTML = '<div class="modal card pad" role="dialog" aria-modal="true" aria-labelledby="pf-title">' +
+        `<h3 id="pf-title">✓ 已加入學習區</h3><p class="muted small">要把「${esc(c.title)}」放到哪個資料夾？</p>` +
+        '<div class="folder-picks">' + list() +
+        '<button type="button" class="folder-pick" data-fid="">🗂 不分類（放在最外層）</button></div>' +
+        '<form class="folder-new" id="pf-new"><input class="input" name="name" maxlength="40" placeholder="或輸入新資料夾名稱，例如：信仰基礎"/><button class="btn btn-sm">＋ 新增並放入</button></form>' +
+        '<p class="muted small">之後也可以在「我的學習區」拖曳調整。</p></div>';
+    };
+    const close = (v) => { box.remove(); document.removeEventListener('keydown', onKey); resolve(v); };
+    const onKey = (e) => { if (e.key === 'Escape') close(null); };
+    draw();
+    box.onclick = (e) => {
+      if (e.target === box) return close(null);
+      const b = e.target.closest('[data-fid]');
+      if (!b) return;
+      close(b.dataset.fid ? myFolders.find((f) => f.id === b.dataset.fid) || null : null);
+    };
+    box.onsubmit = (e) => {
+      e.preventDefault();
+      const name = e.target.name.value.trim().slice(0, 40);
+      if (!name) return toast('請輸入資料夾名稱');
+      if (myFolders.length >= 30) return toast('資料夾最多 30 個');
+      close({ id: newId('f'), name, isNew: true });
+    };
+    document.addEventListener('keydown', onKey);
+    document.body.appendChild(box);
+    const first = box.querySelector('.folder-pick');
+    if (first) first.focus();
+  });
+}
+// 把課程放進資料夾（新資料夾會一起建立）；同一門課只會在一個地方
+async function fileCourse(courseId, folder) {
+  const folders = myFolders.map((f) => ({ ...f, courses: (f.courses || []).filter((id) => id !== courseId) }));
+  let target = folders.find((f) => f.id === folder.id);
+  if (!target) { target = { id: folder.id, name: folder.name, courses: [] }; folders.push(target); }
+  target.courses.push(courseId);
+  await saveArea(myOrder.filter((id) => id !== courseId), folders);
 }
 
 // 從 Firestore 讀取課程目錄；資料庫還沒有課程時，沿用 data.js
@@ -501,12 +551,13 @@ pages.home = (app) => {
     `<p class="site-stats"><span>${ICON.bookOpen} 目前共有 <strong>${path.filter((c) => c.published !== false).length}</strong> 門課程</span>` +
     `<a class="stat-link" href="#/articles" id="stat-articles" hidden>${ICON.fileText} 共 <strong></strong> 篇文章</a>` +
     (learners > 0 ? `<span>${ICON.usersRound} 共 <strong>${learners.toLocaleString()}</strong> 人加入學習</span>` : '') + '</p>' +
-    '<input class="input search" id="q" type="search" placeholder="搜尋課程…" aria-label="搜尋課程" autocomplete="off" />' +
+    '<input class="input search" id="q" type="search" placeholder="搜尋課程或文章…" aria-label="搜尋課程或文章" autocomplete="off" />' +
     '</div></section>' +
     '<section class="container"><h2>學習地圖</h2>' +
     (cats.length ? '<div class="chips" id="chips"><button class="chip" data-cat="">全部</button>' +
       cats.map((c) => `<button class="chip" data-cat="${esc(c)}">${esc(c)}</button>`).join('') + '</div>' : '') +
     '<div class="path" id="list"></div>' +
+    '<div id="search-articles" hidden></div>' +
     (hidden.length ? '<h3 class="muted">不公開的課程（只有管理者看得到這個列表）</h3><div class="path">' + hidden.map((c) => row(c, 0)).join('') + '</div>' : '') +
     '</section>' +
     '<section class="container" id="home-events" hidden></section>' +
@@ -515,14 +566,21 @@ pages.home = (app) => {
     '<p><a class="link" href="#/faq">查看全部常見問題 →</a></p></section>';
 
   const listEl = app.querySelector('#list');
+  let posts = []; // 已發布的文章（搜尋時一起找）
   function draw() {
     app.querySelectorAll('[data-cat]').forEach((b) => b.classList.toggle('active', b.dataset.cat === cat));
     const words = q.split(/\s+/).filter(Boolean);
     const shown = path.map((c, i) => [c, i + 1]).filter(([c]) =>
       (!cat || c.category === cat) &&
       words.every((w) => [c.title, c.subtitle, c.category, c.level, c.description, ...lessonsOf(c).map((l) => l.title)].join(' ').toLowerCase().includes(w)));
+    // 有輸入關鍵字時，也找文章
+    const found = words.length ? posts.filter((a) => words.every((w) => [a.title, a.summary, a.category, a.text].join(' ').toLowerCase().includes(w))) : [];
     listEl.innerHTML = !path.length ? '<p class="muted">課程準備中，敬請期待。</p>'
-      : shown.length ? shown.map(([c, n]) => row(c, n)).join('') : '<p class="muted">找不到符合的課程。</p>';
+      : shown.length ? shown.map(([c, n]) => row(c, n)).join('')
+      : `<p class="muted">找不到符合的課程${found.length ? `，下方有 ${found.length} 篇相關文章` : ''}。</p>`;
+    const box = app.querySelector('#search-articles');
+    box.hidden = !found.length;
+    box.innerHTML = found.length ? `<h3>相關文章（${found.length}）</h3><div class="blog-grid">${found.map(blogCard).join('')}</div>` : '';
   }
   const chips = app.querySelector('#chips');
   if (chips) chips.onclick = (e) => { if (e.target.dataset.cat != null) { cat = e.target.dataset.cat; draw(); } };
@@ -546,7 +604,9 @@ pages.home = (app) => {
   // 最新文章（有發布的文章才顯示）
   loadBlog().then((list) => {
     // 首頁統計：已發布的文章數
-    const n = list.filter((a) => a.published).length;
+    posts = list.filter((a) => a.published);
+    if (q) draw();
+    const n = posts.length;
     const stat = app.querySelector('#stat-articles');
     if (stat && n) { stat.querySelector('strong').textContent = n.toLocaleString(); stat.hidden = false; }
     const box = app.querySelector('#home-blog');
@@ -1382,6 +1442,7 @@ pages.verify = (app) => {
 };
 
 // 我的學習區：學生加入的課程，可以拖曳調整擺放順序
+const MY_VIEWS = { list: ['☰', '列表'], grid: ['▦', '方格'], compact: ['≡', '精簡'] };
 pages.my = (app) => {
   if (!user) return go('/login?next=/my');
   if (!isVerified()) return pages.verify(app);
@@ -1392,6 +1453,10 @@ pages.my = (app) => {
   const folders = myFolders.map((f) => ({ ...f, courses: (f.courses || []).filter((id) => has(id) && !filed.has(id) && filed.add(id)) }));
   const unfiled = all.filter((c) => !filed.has(c.id));
   const collapsedKey = 'isl_folds_' + user.uid;
+  // 排列方式：列表、方格、精簡（記在這台電腦）
+  const viewKey = 'isl_view_' + user.uid;
+  let view = 'list';
+  try { view = MY_VIEWS[localStorage.getItem(viewKey)] ? localStorage.getItem(viewKey) : 'list'; } catch (e) {}
   let collapsed = [];
   try { collapsed = JSON.parse(localStorage.getItem(collapsedKey)) || []; } catch (e) {}
 
@@ -1428,10 +1493,12 @@ pages.my = (app) => {
     '<a class="btn btn-ghost btn-sm" href="#/">＋ 加入更多課程</a>' +
     '<a class="btn btn-ghost btn-sm" href="#/account">⚙ 帳號設定</a></span></div>' +
     (all.length
-      ? '<input class="input my-search" id="myq" type="search" placeholder="搜尋我的課程…" aria-label="搜尋我的課程" autocomplete="off"/>' +
+      ? '<div class="my-bar"><input class="input my-search" id="myq" type="search" placeholder="搜尋我的課程…" aria-label="搜尋我的課程" autocomplete="off"/>' +
+        '<div class="view-switch" role="group" aria-label="排列方式">' +
+        Object.entries(MY_VIEWS).map(([k, v]) => `<button type="button" data-view="${k}" aria-pressed="${k === view}" title="${v[1]}">${v[0]} ${v[1]}</button>`).join('') + '</div></div>' +
         '<p class="muted small" id="myhint">按住 ⠿ 拖曳可調整順序、移進或移出資料夾；也可以按 ↑ ↓，或在課程的「📁」選擇資料夾。會自動儲存。</p>' +
         '<p class="muted" id="mynone" hidden>找不到符合的課程。</p>' +
-        '<div id="area">' + folders.map(folderBox).join('') +
+        `<div id="area" class="view-${view}">` + folders.map(folderBox).join('') +
         (folders.length ? '<h3 class="unfiled-title">未分類</h3>' : '') +
         `<div class="path my-list" data-list="">${unfiled.map((c) => card(c, '')).join('')}</div></div>`
       : '<div class="card pad"><p>你的學習區還沒有課程。</p>' +
@@ -1439,6 +1506,14 @@ pages.my = (app) => {
         '<a href="#/" class="btn btn-sm">查看學習地圖</a></div>') + '</div>';
 
   const area = app.querySelector('#area');
+  app.querySelectorAll('[data-view]').forEach((b) => {
+    b.onclick = () => {
+      view = b.dataset.view;
+      try { localStorage.setItem(viewKey, view); } catch (e) {}
+      area.className = 'view-' + view;
+      app.querySelectorAll('[data-view]').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+    };
+  });
   // 從畫面讀出目前的排列並儲存
   let saving = Promise.resolve();
   const snapshot = () => {
@@ -1563,7 +1638,9 @@ pages.my = (app) => {
     const target = over.closest('.my-card');
     if (target && target !== dragging && area.contains(target)) {
       const r = target.getBoundingClientRect();
-      if (e.clientY > r.top + r.height / 2) target.after(dragging); else target.before(dragging);
+      // 方格排列時看左右，其他看上下
+      const after = area.classList.contains('view-grid') ? e.clientX > r.left + r.width / 2 : e.clientY > r.top + r.height / 2;
+      if (after) target.after(dragging); else target.before(dragging);
       return;
     }
     const head = over.closest('.folder-head');
