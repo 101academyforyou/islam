@@ -263,3 +263,7 @@ table.orders th { font-size: 12px; color: var(--muted); background: var(--soft);
 
 /* 學生名單 */
 #sq { margin: 8px 0 16px; }
+
+/* 我的課程／學習區：搜尋 */
+.my-search { max-width: 420px; margin: 4px 0 8px; }
+.my-list.filtering .my-tools { visibility: hidden; }

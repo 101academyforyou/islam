@@ -480,10 +480,13 @@ pages.my = (app) => {
   app.innerHTML = '<div class="container"><div class="row-between"><h1>我的學習區</h1>' +
     '<a class="btn btn-ghost btn-sm" href="#/">＋ 加入更多課程</a></div>' +
     (list.length
-      ? '<p class="muted small">按住 ⠿ 拖曳，或按 ↑ ↓ 調整順序，排成你想要的學習順序；順序會自動儲存。</p>' +
+      ? '<input class="input my-search" id="myq" type="search" placeholder="搜尋我的課程…" aria-label="搜尋我的課程" autocomplete="off"/>' +
+        '<p class="muted small" id="myhint">按住 ⠿ 拖曳，或按 ↑ ↓ 調整順序，排成你想要的學習順序；順序會自動儲存。</p>' +
+        '<p class="muted" id="mynone" hidden>找不到符合的課程。</p>' +
         '<div class="path my-list" id="mine">' + list.map((c) => {
           const p = progress(c), n = c.unlisted ? 0 : stepOf(c);
-          return `<div class="card step my-card" data-id="${esc(c.id)}">` +
+          const hay = [c.title, c.subtitle, c.category, c.level, c.instructor, ...lessonsOf(c).map((l) => l.title)].join(' ').toLowerCase();
+          return `<div class="card step my-card" data-id="${esc(c.id)}" data-q="${esc(hay)}">` +
             '<div class="my-tools"><span class="drag-handle" title="拖曳調整順序" aria-label="拖曳調整順序">⠿</span>' +
             '<button type="button" class="icon-btn" data-move="-1" aria-label="往上移" title="往上移">↑</button>' +
             '<button type="button" class="icon-btn" data-move="1" aria-label="往下移" title="往下移">↓</button></div>' +
@@ -500,6 +503,21 @@ pages.my = (app) => {
 
   const grid = app.querySelector('#mine');
   if (!grid) return;
+  // 搜尋：只顯示符合的課程；搜尋時先隱藏排序按鈕，清除搜尋後才能調整順序
+  const hint = app.querySelector('#myhint'), none = app.querySelector('#mynone');
+  const hintText = hint.textContent;
+  app.querySelector('#myq').oninput = (e) => {
+    const words = e.target.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    let shown = 0;
+    [...grid.children].forEach((card) => {
+      const ok = words.every((w) => card.dataset.q.includes(w));
+      card.hidden = !ok;
+      if (ok) shown++;
+    });
+    grid.classList.toggle('filtering', words.length > 0);
+    none.hidden = shown > 0;
+    hint.textContent = words.length ? '搜尋中無法調整順序，清除搜尋後就能拖曳或按 ↑ ↓。' : hintText;
+  };
   let saving = Promise.resolve();
   const persist = () => {
     const ids = [...grid.children].map((el) => el.dataset.id);
