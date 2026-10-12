@@ -259,3 +259,6 @@ table.orders th { font-size: 12px; color: var(--muted); background: var(--soft);
   .my-tools .arr-h { display: none; }
   .my-tools .arr-v { display: inline; }
 }
+
+/* 學生名單 */
+#sq { margin: 8px 0 16px; }

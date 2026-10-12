@@ -7,7 +7,7 @@
  * 安全規則在 1.01academy repo 的 firestore.rules。
  */
 // 這個網站的 Firestore 集合名稱
-const COL = { courses: 'islam_courses', videos: 'islam_courseVideos', enroll: 'islam_enroll', prefs: 'islam_prefs' };
+const COL = { courses: 'islam_courses', videos: 'islam_courseVideos', enroll: 'islam_enroll', prefs: 'islam_prefs', students: 'islam_students' };
 const FIREBASE = 'https://www.gstatic.com/firebasejs/10.12.2/';
 const CONFIG = window.SITE_CONFIG || {};
 const configured = !!(CONFIG.firebaseConfig && CONFIG.firebaseConfig.apiKey);
@@ -16,6 +16,7 @@ let fb = null;           // Firebase 函式
 let auth = null, db = null, fbApp = null;
 let user = null;         // 目前登入的 Firebase 使用者
 let joined = [];         // 已加入的課程 id（從課程頁按「加入課程」）
+let joinedAt = {};       // 課程 id → 加入時間（毫秒）
 let myOrder = [];        // 學生自己在「我的學習區」拖曳排好的順序（islam_prefs/{Email}.order）
 let accessReady = Promise.resolve();
 const videoCache = {};   // 課程 id → { 單元 id: YouTube ID }
@@ -127,26 +128,57 @@ async function initFirebase() {
 
 async function loadAccess() {
   joined = [];
+  joinedAt = {};
   myOrder = [];
   if (!isVerified()) return;
   const email = user.email.toLowerCase();
   await Promise.all([
     fb.getDocs(fb.collection(db, COL.enroll, email, 'courses')).then((snap) => {
       // 預設依加入時間排列
-      joined = snap.docs.map((d) => ({ id: d.id, at: d.data().joinedAt || 0 })).sort((a, b) => a.at - b.at).map((x) => x.id);
+      snap.docs.forEach((d) => { joinedAt[d.id] = d.data().joinedAt || 0; });
+      joined = Object.keys(joinedAt).sort((a, b) => joinedAt[a] - joinedAt[b]);
     }).catch((e) => console.error(e)),
     fb.getDoc(fb.doc(db, COL.prefs, email)).then((snap) => {
       myOrder = snap.exists() ? (snap.data().order || []) : [];
     }).catch((e) => console.error(e))
   ]);
+  syncStudent(); // 補齊／更新管理者的學生名單（不必等它完成）
+
+}
+
+// 學生名單（給管理者看）：islam_students/{Email} = { email, name, courses: { 課程id: 加入時間 }, updatedAt }
+// 學生加入或移出課程時更新；舊的學生下次登入時自動補上
+let studentSynced = '';
+async function syncStudent(force = false) {
+  if (!isVerified()) return;
+  const email = user.email.toLowerCase();
+  const key = JSON.stringify([email, joined.slice().sort()]);
+  if (!force && key === studentSynced) return;
+  try {
+    if (!force) {
+      const snap = await fb.getDoc(fb.doc(db, COL.students, email));
+      const have = snap.exists() ? Object.keys(snap.data().courses || {}).sort() : null;
+      const upToDate = have ? JSON.stringify([email, have]) === key : !joined.length; // 沒加入任何課程就不必建立
+      if (upToDate) { studentSynced = key; return; }
+    }
+    const courses = {};
+    joined.forEach((id) => { courses[id] = joinedAt[id] || Date.now(); });
+    await fb.setDoc(fb.doc(db, COL.students, email), { email, name: user.displayName || '', courses, updatedAt: Date.now() });
+    studentSynced = key;
+  } catch (e) {
+    console.error(e);
+  }
 }
 
 // 加入課程（每門課分開加入）；stay = 留在原頁（例如從首頁快速加入）
 async function joinCourse(c, btn, stay = false) {
   btn.disabled = true;
   try {
-    await fb.setDoc(fb.doc(db, COL.enroll, user.email.toLowerCase(), 'courses', c.id), { joinedAt: Date.now() });
+    const at = Date.now();
+    await fb.setDoc(fb.doc(db, COL.enroll, user.email.toLowerCase(), 'courses', c.id), { joinedAt: at });
     if (!joined.includes(c.id)) joined.push(c.id);
+    joinedAt[c.id] = at;
+    syncStudent(true);
     toast('已加入我的學習區');
     if (stay) render(); else go('/learn/' + c.id);
   } catch (err) {
@@ -159,6 +191,8 @@ async function joinCourse(c, btn, stay = false) {
 async function leaveCourse(c) {
   await fb.deleteDoc(fb.doc(db, COL.enroll, user.email.toLowerCase(), 'courses', c.id));
   joined = joined.filter((id) => id !== c.id);
+  delete joinedAt[c.id];
+  syncStudent(true);
 }
 
 // 我的學習區的課程：依學生自己排的順序，沒排過的放後面（依加入時間）
@@ -601,6 +635,7 @@ async function resizeCover(file) {
 // 課程列表
 pages.admin = async (app, id, query, sub) => {
   if (!adminGuard(app)) return;
+  if (id === 'students') return pages.students(app);
   if (id) return pages.edit(app, id);
   app.innerHTML = '<div class="container">' + adminTabs('courses') + '<div class="row-between"><h1>課程管理</h1><a class="btn btn-sm" href="#/admin/new">＋ 新增課程</a></div>' +
     (coursesFromDb ? '' :
@@ -641,7 +676,61 @@ pages.admin = async (app, id, query, sub) => {
 };
 
 const adminTabs = (cur) => '<div class="chips admin-tabs">' +
-  `<a class="chip${cur === 'courses' ? ' active' : ''}" href="#/admin">課程管理（順序 = 學習路線的階段）</a></div>`;
+  `<a class="chip${cur === 'courses' ? ' active' : ''}" href="#/admin">課程管理（順序 = 學習路線的階段）</a>` +
+  `<a class="chip${cur === 'students' ? ' active' : ''}" href="#/admin/students">學生名單</a></div>`;
+
+// 學生名單：加入過伊斯蘭網站課程的學生（islam_students），可搜尋、匯出 CSV
+const fmtDate = (ms) => { if (!ms) return ''; const d = new Date(ms); return `${d.getFullYear()}/${pad2(d.getMonth() + 1)}/${pad2(d.getDate())}`; };
+pages.students = async (app) => {
+  if (!adminGuard(app)) return;
+  app.innerHTML = '<div class="container"><p class="muted">載入中…</p></div>';
+  let list = [];
+  try {
+    const snap = await fb.getDocs(fb.collection(db, COL.students));
+    list = snap.docs.map((d) => ({ email: d.id, ...d.data() }))
+      .map((s) => ({ ...s, items: Object.entries(s.courses || {}).map(([id, at]) => ({ id, at: Number(at) || 0 })).sort((a, b) => a.at - b.at) }))
+      .filter((s) => s.items.length)
+      .sort((a, b) => Math.max(0, ...b.items.map((x) => x.at)) - Math.max(0, ...a.items.map((x) => x.at)));
+  } catch (e) {
+    console.error(e);
+    app.innerHTML = '<div class="container">' + adminTabs('students') + '<h1>學生名單</h1><div class="card pad"><p>無法讀取學生名單：' + esc(e.code || e.message) + '</p><p class="muted small">請確認已部署最新的 Firestore 規則。</p></div></div>';
+    return;
+  }
+  if (!document.body.contains(app)) return;
+  const title = (id) => (findCourse(id) || {}).title || id + '（已刪除的課程）';
+  let q = '';
+  app.innerHTML = '<div class="container editor">' + adminTabs('students') +
+    '<div class="row-between"><h1>學生名單</h1><button type="button" class="btn btn-ghost btn-sm" id="csv">⬇ 匯出 CSV</button></div>' +
+    `<p class="muted small">共 ${list.length} 位學生、${list.reduce((n, s) => n + s.items.length, 0)} 筆加入紀錄。依最近加入時間排列。` +
+    '學生加入或移出課程時會自動更新；更新這個功能之前就加入的學生，會在他下次登入網站時出現。</p>' +
+    '<input class="input" id="sq" type="search" placeholder="搜尋 Email 或姓名" autocomplete="off"/>' +
+    '<div id="slist"></div></div>';
+  const shown = () => list.filter((s) => !q || (s.email + ' ' + (s.name || '')).toLowerCase().includes(q));
+  function draw() {
+    const rows = shown();
+    app.querySelector('#slist').innerHTML = rows.length
+      ? '<div class="card table-wrap"><table class="orders"><thead><tr><th>Email</th><th>姓名</th><th>加入的課程（加入日期）</th></tr></thead><tbody>' +
+        rows.map((s) => `<tr><td class="small">${esc(s.email)}</td><td class="small">${esc(s.name || '')}</td><td class="small">` +
+          s.items.map((x) => `${esc(title(x.id))}（${fmtDate(x.at)}）`).join('<br>') + '</td></tr>').join('') +
+        '</tbody></table></div>'
+      : `<p class="muted">${list.length ? '找不到符合的學生。' : '還沒有學生加入課程。'}</p>`;
+  }
+  app.querySelector('#sq').oninput = (e) => { q = e.target.value.trim().toLowerCase(); draw(); };
+  app.querySelector('#csv').onclick = () => {
+    const cell = (v) => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+    const lines = [['Email', '姓名', '課程', '加入日期'].map(cell).join(',')];
+    shown().forEach((s) => s.items.forEach((x) => lines.push([s.email, s.name || '', title(x.id), fmtDate(x.at)].map(cell).join(','))));
+    // 開頭加 BOM，Excel 開啟中文才不會亂碼
+    const blob = new Blob(['\ufeff' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.setAttribute('download', `students-${fmtDate(Date.now()).replace(/\//g, '')}.csv`);
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+  draw();
+};
 
 // 編輯單一課程
 pages.edit = async (app, id) => {
