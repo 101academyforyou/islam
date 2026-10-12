@@ -657,32 +657,92 @@ const ymd = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDat
 const todayStr = () => ymd(new Date());
 const endOf = (e) => (e.end && e.end >= e.start ? e.end : e.start);
 const eventsOn = (list, day) => list.filter((e) => e.start <= day && endOf(e) >= day);
-const upcomingEvents = (list) => list.filter((e) => e.published && endOf(e) >= todayStr());
 const WEEK = ['日', '一', '二', '三', '四', '五', '六'];
 const dateLabel = (s) => { const [y, m, d] = s.split('-').map(Number); const w = new Date(y, m - 1, d).getDay(); return `${m}/${d}（${WEEK[w]}）`; };
+const parseDay = (s) => s.split('-').map(Number);
+const addDays = (s, n) => { const [y, m, d] = parseDay(s); return ymd(new Date(y, m - 1, d + n)); };
+const dayDiff = (a, b) => { const [y1, m1, d1] = parseDay(a), [y2, m2, d2] = parseDay(b); return Math.round((Date.UTC(y2, m2 - 1, d2) - Date.UTC(y1, m1 - 1, d1)) / 864e5); };
+
+// 規律活動：每日、每週、每兩週、每月（每月同一天；沒有那一天的月份跳過，例如 31 日）
+const REPEATS = { '': '不重複', daily: '每日', weekly: '每週', biweekly: '每兩週', monthly: '每月' };
+// 縣市（地點篩選用）
+const CITIES = ['台北市', '新北市', '基隆市', '桃園市', '新竹市', '新竹縣', '苗栗縣', '台中市', '彰化縣', '南投縣', '雲林縣', '嘉義市', '嘉義縣',
+  '台南市', '高雄市', '屏東縣', '宜蘭縣', '花蓮縣', '台東縣', '澎湖縣', '金門縣', '連江縣', '線上', '海外'];
+const untilOf = (e) => (e.repeat && e.repeatUntil && e.repeatUntil >= e.start ? e.repeatUntil : '');
+// 活動在 [from, to] 期間的每一次（每次是一個帶有該次日期的活動複本）
+function occurrences(e, from, to) {
+  const dur = dayDiff(e.start, endOf(e));
+  if (!e.repeat || !REPEATS[e.repeat]) return endOf(e) >= from && e.start <= to ? [e] : [];
+  const until = untilOf(e) || '9999-12-31';
+  const out = [];
+  const push = (s) => { const en = addDays(s, dur); if (en >= from && s <= to && s <= until) out.push({ ...e, start: s, end: dur ? en : '', series: e.start }); };
+  if (e.repeat === 'monthly') {
+    const [y0, m0, d0] = parseDay(e.start);
+    const [fy, fm] = parseDay(from);
+    let i = Math.max(0, (fy - y0) * 12 + (fm - m0) - 1);
+    for (let n = 0; n < 400; n++, i++) {
+      const dt = new Date(y0, m0 - 1 + i, d0);
+      if (dt.getDate() !== d0) continue; // 這個月沒有這一天
+      const s = ymd(dt);
+      if (s > to || s > until) break;
+      push(s);
+    }
+  } else {
+    const step = { daily: 1, weekly: 7, biweekly: 14 }[e.repeat];
+    let i = Math.max(0, Math.floor((dayDiff(e.start, from) - dur) / step));
+    for (let n = 0; n < 1000; n++, i++) {
+      const s = addDays(e.start, i * step);
+      if (s > to || s > until) break;
+      push(s);
+    }
+  }
+  return out;
+}
+const nextOccurrence = (e, from = todayStr()) => occurrences(e, from, addDays(from, 800))[0] || null;
+const seriesEnd = (e) => (e.repeat && REPEATS[e.repeat] ? untilOf(e) || '9999-12-31' : endOf(e));
+// 即將舉行：每個活動取下一次，依日期排序
+const upcomingEvents = (list) => list.filter((e) => e.published).map((e) => nextOccurrence(e)).filter(Boolean)
+  .sort((a, b) => (a.start + (a.startTime || '')).localeCompare(b.start + (b.startTime || '')));
+function repeatText(e) {
+  if (!e.repeat || !REPEATS[e.repeat]) return '';
+  const base = e.series || e.start;
+  const [, , d] = parseDay(base);
+  const w = WEEK[new Date(...(([y, m, dd]) => [y, m - 1, dd])(parseDay(base))).getDay()];
+  const label = { daily: '每天', weekly: `每週${w}`, biweekly: `每兩週的週${w}`, monthly: `每月 ${d} 日` }[e.repeat];
+  const until = untilOf(e);
+  return label + (until ? `（到 ${until.replace(/-/g, '/')}）` : '');
+}
+const placeText = (e) => [e.city, e.location].filter(Boolean).join(' ');
 function whenText(e) {
   const span = endOf(e) !== e.start ? `${dateLabel(e.start)} – ${dateLabel(endOf(e))}` : dateLabel(e.start);
   const time = e.allDay || !e.startTime ? '' : ` ${e.startTime}${e.endTime ? '–' + e.endTime : ''}`;
   return span + time;
 }
 const eventRow = (e) => {
-  const [, m, d] = e.start.split('-').map(Number);
+  const [, m, d] = parseDay(e.start);
   const c = e.courseId ? findCourse(e.courseId) : null;
   return `<a class="card event-row" href="#/event/${e.id}"><span class="ev-date ${typeClass(e.type)}"><b>${d}</b><small>${m} 月</small></span>` +
-    `<span class="ev-main"><span class="tag">${[e.type, e.published ? '' : '草稿'].filter(Boolean).map(esc).join(' · ')}</span>` +
+    `<span class="ev-main"><span class="tag">${[e.type, e.repeat && REPEATS[e.repeat] ? '🔁 ' + REPEATS[e.repeat] : '', e.city, e.published ? '' : '草稿'].filter(Boolean).map(esc).join(' · ')}</span>` +
     `<strong dir="auto">${esc(e.title)}</strong>` +
     `<span class="muted small">${esc(whenText(e))}${e.location ? ' · ' + esc(e.location) : ''}${c ? ' · 課程：' + esc(c.title) : ''}</span></span></a>`;
 };
-// 加入 Google 日曆、下載 .ics（Apple／Outlook）
+// 加入 Google 日曆、下載 .ics（Apple／Outlook）；規律活動加上 RRULE
 const compact = (s) => s.replace(/-/g, '');
-const plusDay = (s) => { const [y, m, d] = s.split('-').map(Number); return ymd(new Date(y, m - 1, d + 1)); };
+const plusDay = (s) => addDays(s, 1);
+function rrule(e) {
+  if (!e.repeat || !REPEATS[e.repeat]) return '';
+  const freq = { daily: 'FREQ=DAILY', weekly: 'FREQ=WEEKLY', biweekly: 'FREQ=WEEKLY;INTERVAL=2', monthly: 'FREQ=MONTHLY' }[e.repeat];
+  const until = untilOf(e);
+  return 'RRULE:' + freq + (until ? ';UNTIL=' + (e.allDay || !e.startTime ? compact(until) : utcStamp(until, '23:59')) : '');
+}
 function googleCalUrl(e) {
   const dates = e.allDay || !e.startTime
     ? `${compact(e.start)}/${compact(plusDay(endOf(e)))}`
     : `${compact(e.start)}T${e.startTime.replace(':', '')}00/${compact(endOf(e))}T${(e.endTime || e.startTime).replace(':', '')}00`;
   const details = [plainText(e.description).slice(0, 1200), e.url, location.origin + location.pathname + '#/event/' + e.id].filter(Boolean).join('\n\n');
   return 'https://calendar.google.com/calendar/render?action=TEMPLATE&ctz=Asia%2FTaipei' +
-    `&text=${encodeURIComponent(e.title)}&dates=${dates}&details=${encodeURIComponent(details)}&location=${encodeURIComponent(e.location || e.url || '')}`;
+    `&text=${encodeURIComponent(e.title)}&dates=${dates}&details=${encodeURIComponent(details)}&location=${encodeURIComponent(placeText(e) || e.url || '')}` +
+    (rrule(e) ? `&recur=${encodeURIComponent(rrule(e))}` : '');
 }
 // 台灣時間（UTC+8，沒有日光節約）轉成 UTC，日曆 App 都能正確顯示
 const utcStamp = (day, time) => { const [y, m, d] = day.split('-').map(Number); const [hh, mm] = time.split(':').map(Number); return new Date(Date.UTC(y, m - 1, d, hh - 8, mm)).toISOString().replace(/[-:]/g, '').slice(0, 15) + 'Z'; };
@@ -694,8 +754,8 @@ function downloadIcs(e) {
     ? [`DTSTART;VALUE=DATE:${compact(e.start)}`, `DTEND;VALUE=DATE:${compact(plusDay(endOf(e)))}`]
     : [`DTSTART:${utcStamp(e.start, e.startTime)}`, `DTEND:${utcStamp(endOf(e), e.endTime || e.startTime)}`];
   const ics = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//islam.onepointzeroone.org//calendar//ZH', 'BEGIN:VEVENT',
-    `UID:${e.id}@islam.onepointzeroone.org`, `DTSTAMP:${new Date().toISOString().replace(/[-:]/g, '').slice(0, 15)}Z`, ...when,
-    `SUMMARY:${escIcs(e.title)}`, e.location ? `LOCATION:${escIcs(e.location)}` : '',
+    `UID:${e.id}@islam.onepointzeroone.org`, `DTSTAMP:${new Date().toISOString().replace(/[-:]/g, '').slice(0, 15)}Z`, ...when, rrule(e),
+    `SUMMARY:${escIcs(e.title)}`, placeText(e) ? `LOCATION:${escIcs(placeText(e))}` : '',
     `DESCRIPTION:${escIcs([plainText(e.description), e.url].filter(Boolean).join('\n\n'))}`,
     `URL:${location.origin + location.pathname}#/event/${e.id}`, 'END:VEVENT', 'END:VCALENDAR'].filter(Boolean).join('\r\n');
   downloadFile(`event-${e.start}.ics`, ics, 'text/calendar');
@@ -707,52 +767,64 @@ pages.calendar = async (app, ym) => {
   if (!document.body.contains(app)) return;
   const now = new Date();
   let [y, m] = /^\d{4}-\d{2}$/.test(ym || '') ? ym.split('-').map(Number) : [now.getFullYear(), now.getMonth() + 1];
-  let picked = '';
-  let type = '';
+  let picked = '', type = '', city = '';
+  const types = EVENT_TYPES.filter((t) => list.some((e) => e.type === t));
+  const cities = CITIES.filter((c) => list.some((e) => e.city === c));
   function draw() {
     const first = new Date(y, m - 1, 1), days = new Date(y, m, 0).getDate();
-    const shownList = list.filter((e) => !type || e.type === type);
+    const from = `${y}-${pad2(m)}-01`, to = `${y}-${pad2(m)}-${pad2(days)}`;
+    const shownList = list.filter((e) => (!type || e.type === type) && (!city || e.city === city));
+    const occ = shownList.flatMap((e) => occurrences(e, from, to))
+      .sort((a, b) => (a.start + (a.allDay ? '' : a.startTime || '')).localeCompare(b.start + (b.allDay ? '' : b.startTime || '')));
     const cells = [];
     for (let i = 0; i < first.getDay(); i++) cells.push('<div class="cal-cell blank"></div>');
     for (let d = 1; d <= days; d++) {
       const day = `${y}-${pad2(m)}-${pad2(d)}`;
-      const evs = eventsOn(shownList, day);
+      const evs = eventsOn(occ, day);
       cells.push(`<button type="button" class="cal-cell${day === todayStr() ? ' today' : ''}${day === picked ? ' picked' : ''}${evs.length ? ' has' : ''}" data-day="${day}">` +
         `<span class="cal-d">${d}</span>` +
         evs.slice(0, 3).map((e) => `<span class="cal-ev ${typeClass(e.type)}" title="${esc(e.title)}">${e.allDay || !e.startTime || e.start !== day ? '' : esc(e.startTime) + ' '}${esc(e.title)}</span>`).join('') +
         (evs.length > 3 ? `<span class="cal-more">還有 ${evs.length - 3} 個</span>` : '') +
         `<span class="cal-dots">${evs.slice(0, 4).map((e) => `<i class="${typeClass(e.type)}"></i>`).join('')}</span></button>`);
     }
-    const monthEvents = shownList.filter((e) => e.start <= `${y}-${pad2(m)}-${pad2(days)}` && endOf(e) >= `${y}-${pad2(m)}-01`);
-    const dayEvents = picked ? eventsOn(shownList, picked) : null;
-    const types = EVENT_TYPES.filter((t) => list.some((e) => e.type === t));
+    // 這個月的活動：規律活動只列一次（這個月的第一次）
+    const seen = new Set();
+    const monthEvents = occ.filter((e) => !seen.has(e.id) && seen.add(e.id));
+    const dayEvents = picked ? eventsOn(occ, picked) : null;
+    const filters = (types.length > 1 ? `<select class="input" data-filter="type" aria-label="活動類型"><option value="">全部類型</option>${types.map((t) => `<option ${t === type ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select>` : '') +
+      (cities.length ? `<select class="input" data-filter="city" aria-label="縣市"><option value="">全部縣市</option>${cities.map((c) => `<option ${c === city ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select>` : '');
     app.innerHTML = '<div class="container calendar">' +
       '<div class="row-between"><h1>行事曆</h1>' + (isAdmin() ? '<a class="btn btn-sm" href="#/admin/event/new">＋ 新增活動</a>' : '') + '</div>' +
       '<div class="cal-head"><button type="button" class="btn btn-ghost btn-sm" data-nav="-1" aria-label="上個月">‹</button>' +
       `<h2>${y} 年 ${m} 月</h2><button type="button" class="btn btn-ghost btn-sm" data-nav="1" aria-label="下個月">›</button>` +
       '<button type="button" class="btn btn-ghost btn-sm" data-nav="0">今天</button>' +
-      (types.length > 1 ? '<span class="chips cal-types"><button class="chip" data-type="">全部</button>' + types.map((t) => `<button class="chip" data-type="${esc(t)}"><i class="dot-sw ${typeClass(t)}"></i>${esc(t)}</button>`).join('') + '</span>' : '') +
-      '</div>' +
+      (filters ? `<span class="cal-filters">${filters}</span>` : '') + '</div>' +
+      (types.length > 1 ? '<p class="cal-legend">' + types.map((t) => `<span><i class="dot-sw ${typeClass(t)}"></i>${esc(t)}</span>`).join('') + '</p>' : '') +
       '<div class="cal-grid">' + WEEK.map((w) => `<div class="cal-w">${w}</div>`).join('') + cells.join('') + '</div>' +
       (dayEvents
         ? `<h3>${esc(dateLabel(picked))}</h3>` + (dayEvents.length ? '<div class="event-list">' + dayEvents.map(eventRow).join('') + '</div>' : '<p class="muted">這一天沒有活動。</p>')
-        : `<h3>${m} 月的活動</h3>` + (monthEvents.length ? '<div class="event-list">' + monthEvents.map(eventRow).join('') + '</div>' : '<p class="muted">這個月還沒有活動。</p>')) +
+        : `<h3>${m} 月的活動</h3>` + (monthEvents.length ? '<div class="event-list">' + monthEvents.map(eventRow).join('') + '</div>'
+          : `<p class="muted">${type || city ? '這個月沒有符合條件的活動。' : '這個月還沒有活動。'}</p>`)) +
       '</div>';
-    app.querySelectorAll('[data-type]').forEach((b) => b.classList.toggle('active', b.dataset.type === type));
   }
   app.onclick = (e) => {
     const nav = e.target.closest('[data-nav]');
     if (nav) {
       const n = +nav.dataset.nav;
-      if (n === 0) { y = now.getFullYear(); m = now.getMonth() + 1; picked = ''; }
-      else { m += n; if (m < 1) { m = 12; y--; } if (m > 12) { m = 1; y++; } picked = ''; }
+      if (n === 0) { y = now.getFullYear(); m = now.getMonth() + 1; }
+      else { m += n; if (m < 1) { m = 12; y--; } if (m > 12) { m = 1; y++; } }
+      picked = '';
       history.replaceState(null, '', `#/calendar/${y}-${pad2(m)}`);
       return draw();
     }
     const cell = e.target.closest('[data-day]');
-    if (cell) { picked = picked === cell.dataset.day ? '' : cell.dataset.day; return draw(); }
-    const t = e.target.closest('[data-type]');
-    if (t) { type = t.dataset.type; draw(); }
+    if (cell) { picked = picked === cell.dataset.day ? '' : cell.dataset.day; draw(); }
+  };
+  app.onchange = (e) => {
+    const f = e.target.dataset.filter;
+    if (f === 'type') type = e.target.value;
+    if (f === 'city') city = e.target.value;
+    if (f) draw();
   };
   draw();
 };
@@ -765,13 +837,19 @@ pages.event = async (app, id) => {
   if (!document.body.contains(app)) return;
   if (!e || (!e.published && !isAdmin())) return notFound(app);
   const c = e.courseId ? findCourse(e.courseId) : null;
+  const repeating = e.repeat && REPEATS[e.repeat];
+  const next = repeating ? occurrences(e, todayStr(), addDays(todayStr(), 800)).slice(0, 6) : [];
+  const shown = next[0] || e;
   app.innerHTML = '<div class="container narrow blog-page event-page">' +
-    `<a href="#/calendar/${e.start.slice(0, 7)}" class="muted small">← 行事曆</a>` +
+    `<a href="#/calendar/${shown.start.slice(0, 7)}" class="muted small">← 行事曆</a>` +
     (isAdmin() ? ` · <a href="#/admin/event/${e.id}" class="link small">✎ 編輯此活動</a>` + (e.published ? '' : ' <span class="tag">（草稿）</span>') : '') +
     `<p class="tag"><i class="dot-sw ${typeClass(e.type)}"></i>${esc(e.type || '活動')}</p><h1 dir="auto">${esc(e.title)}</h1>` +
     '<div class="card pad event-facts">' +
-    `<p><strong>時間</strong><span>${esc(whenText(e))}${e.allDay || !e.startTime ? '（全天）' : ''}</span></p>` +
-    (e.location ? `<p><strong>地點</strong><span dir="auto">${esc(e.location)}</span></p>` : '') +
+    (repeating
+      ? `<p><strong>時間</strong><span>🔁 ${esc(repeatText(e))}${e.allDay || !e.startTime ? '（全天）' : ` ${esc(e.startTime)}${e.endTime ? '–' + esc(e.endTime) : ''}`}</span></p>` +
+        `<p><strong>日期</strong><span>${next.length ? '接下來：' + next.map((o) => esc(dateLabel(o.start))).join('、') : '已經全部結束'}</span></p>`
+      : `<p><strong>時間</strong><span>${esc(whenText(e))}${e.allDay || !e.startTime ? '（全天）' : ''}</span></p>`) +
+    (placeText(e) ? `<p><strong>地點</strong><span dir="auto">${esc(placeText(e))}</span></p>` : '') +
     (e.url ? `<p><strong>連結</strong><span><a class="link" href="${esc(e.url)}" target="_blank" rel="noopener">${esc(e.url)}</a></span></p>` : '') +
     (c ? `<p><strong>課程</strong><span><a class="link" href="#/course/${c.id}">${esc(c.title)} →</a></span></p>` : '') +
     `<div class="lesson-nav"><a class="btn btn-sm" href="${esc(googleCalUrl(e))}" target="_blank" rel="noopener">＋ 加入 Google 日曆</a>` +
@@ -786,10 +864,13 @@ pages.eventAdmin = async (app) => {
   const list = await loadEvents(true);
   if (!document.body.contains(app)) return;
   const today = todayStr();
-  const future = list.filter((e) => endOf(e) >= today), past = list.filter((e) => endOf(e) < today).reverse();
+  // 即將舉行：顯示下一次的日期；已結束：依開始日期倒序
+  const future = list.filter((e) => seriesEnd(e) >= today).map((e) => ({ ...(nextOccurrence(e) || e), published: e.published }))
+    .sort((a, b) => a.start.localeCompare(b.start));
+  const past = list.filter((e) => seriesEnd(e) < today).reverse();
   app.innerHTML = '<div class="container">' + adminTabs('events') +
     '<div class="row-between"><h1>行事曆</h1><span class="lesson-nav"><a class="btn btn-ghost btn-sm" href="#/calendar">查看行事曆</a><a class="btn btn-sm" href="#/admin/event/new">＋ 新增活動</a></span></div>' +
-    '<p class="muted small">課程開課、講座、活動、節日都可以加到行事曆。已發布的活動顯示在網站上方的「行事曆」頁，首頁也會列出最近 3 個。</p>' +
+    '<p class="muted small">課程開課、講座、活動、節日都可以加到行事曆，也可以設定每日、每週、每兩週、每月重複。已發布的活動顯示在網站上方的「行事曆」頁，首頁也會列出最近 3 個。</p>' +
     '<h3>即將舉行</h3>' + (future.length ? '<div class="event-list">' + future.map(eventRow).join('') + '</div>' : '<p class="muted">沒有即將舉行的活動，按「＋ 新增活動」新增。</p>') +
     (past.length ? '<h3>已結束</h3><div class="event-list past">' + past.map(eventRow).join('') + '</div>' : '') + '</div>';
   // 管理頁點活動直接進編輯
@@ -802,7 +883,7 @@ pages.eventEdit = async (app, id, query = {}) => {
   const src = isNew ? null : eventCache.find((x) => x.id === id);
   if (!isNew && !src) return notFound(app);
   if (!document.body.contains(app)) return;
-  const blank = { title: '', type: query.course ? '課程' : '活動', start: query.date || todayStr(), end: '', allDay: false, startTime: '', endTime: '', location: '', url: '', courseId: query.course || '', description: '', published: false };
+  const blank = { title: '', type: query.course ? '課程' : '活動', start: query.date || todayStr(), end: '', allDay: false, startTime: '', endTime: '', city: '', location: '', url: '', courseId: query.course || '', description: '', repeat: '', repeatUntil: '', published: false };
   const e = isNew ? { ...blank, id: newId('e'), createdAt: Date.now() } : { ...blank, ...src };
   const field = (label, name, val, attrs = '') => `<label>${label}<input class="input" name="${name}" value="${esc(val)}" ${attrs}/></label>`;
   function draw() {
@@ -815,7 +896,11 @@ pages.eventEdit = async (app, id, query = {}) => {
       '<div class="two">' + field('開始日期', 'start', e.start, 'type="date" required') + field('結束日期 <span class="muted small">一天的活動可留空</span>', 'end', e.end, 'type="date"') + '</div>' +
       `<label class="check"><input type="checkbox" name="allDay" ${e.allDay ? 'checked' : ''}/> 全天活動</label>` +
       `<div class="two" id="times" ${e.allDay ? 'hidden' : ''}>` + field('開始時間', 'startTime', e.startTime, 'type="time"') + field('結束時間', 'endTime', e.endTime, 'type="time"') + '</div>' +
-      field('地點 <span class="muted small">可留空</span>', 'location', e.location, 'maxlength="200"') +
+      '<div class="two">' + `<label>重複<select class="input" name="repeat">${Object.entries(REPEATS).map(([k, v]) => `<option value="${k}" ${k === (e.repeat || '') ? 'selected' : ''}>${v}</option>`).join('')}</select></label>` +
+      `<span id="until" ${e.repeat ? '' : 'hidden'}>` + field('重複到 <span class="muted small">可留空＝一直重複</span>', 'repeatUntil', e.repeatUntil, 'type="date"') + '</span></div>' +
+      `<p class="muted small" id="repeat-hint">${e.repeat ? esc(repeatText(e)) : ''}</p>` +
+      '<div class="two">' + `<label>縣市 <span class="muted small">用來篩選地點</span><select class="input" name="city"><option value="">（未指定）</option>${CITIES.map((c) => `<option ${c === e.city ? 'selected' : ''}>${c}</option>`).join('')}</select></label>` +
+      field('地點 <span class="muted small">可留空，例如：台北清真寺</span>', 'location', e.location, 'maxlength="200"') + '</div>' +
       field('連結 <span class="muted small">可留空，例如報名表、直播網址</span>', 'url', e.url, 'placeholder="https://…"') +
       `<label class="check"><input type="checkbox" name="published" ${e.published ? 'checked' : ''}/> 發布（取消勾選則是草稿，只有管理者看得到）</label></div>` +
       '<div class="card pad"><h3>活動說明 <span class="muted small">可留空</span></h3>' + mediaButton('description') +
@@ -828,7 +913,7 @@ pages.eventEdit = async (app, id, query = {}) => {
   function collect() {
     const f = app.querySelector('#ee');
     if (!f) return;
-    ['title', 'type', 'courseId', 'start', 'end', 'startTime', 'endTime', 'location', 'url'].forEach((k) => { e[k] = f[k].value.trim(); });
+    ['title', 'type', 'courseId', 'start', 'end', 'startTime', 'endTime', 'city', 'location', 'url', 'repeat', 'repeatUntil'].forEach((k) => { e[k] = f[k].value.trim(); });
     e.allDay = f.allDay.checked;
     e.published = f.published.checked;
     e.description = f.description.value.replace(/\s+$/, '');
@@ -843,10 +928,11 @@ pages.eventEdit = async (app, id, query = {}) => {
       : !/^\d{4}-\d{2}-\d{2}$/.test(e.start) ? '請選擇開始日期'
       : e.end && e.end < e.start ? '結束日期不能早於開始日期'
       : !e.allDay && e.startTime && e.endTime && e.endTime < e.startTime && (!e.end || e.end === e.start) ? '結束時間不能早於開始時間'
+      : e.repeat && e.repeatUntil && e.repeatUntil < e.start ? '「重複到」不能早於開始日期'
       : e.url && !/^https?:\/\/\S+$/i.test(e.url) ? '連結要以 https:// 開頭' : '';
     if (problem) { setStatus('⚠ ' + problem, true); return Promise.resolve(false); }
     const data = { title: e.title, type: e.type, start: e.start, end: e.end && e.end !== e.start ? e.end : '', allDay: e.allDay, startTime: e.allDay ? '' : e.startTime, endTime: e.allDay ? '' : e.endTime,
-      location: e.location, url: e.url, courseId: e.courseId, description: e.description, published: e.published, createdAt: e.createdAt || Date.now(), updatedAt: Date.now() };
+      city: e.city, location: e.location, url: e.url, courseId: e.courseId, repeat: e.repeat || '', repeatUntil: e.repeat ? e.repeatUntil : '', description: e.description, published: e.published, createdAt: e.createdAt || Date.now(), updatedAt: Date.now() };
     setStatus('儲存中…');
     chain = chain.then(async () => {
       await fb.setDoc(fb.doc(db, COL.events, e.id), data);
@@ -869,6 +955,11 @@ pages.eventEdit = async (app, id, query = {}) => {
     });
     f.addEventListener('change', (ev) => {
       if (ev.target.name === 'allDay') app.querySelector('#times').hidden = ev.target.checked;
+      if (['repeat', 'start', 'repeatUntil'].includes(ev.target.name)) {
+        collect();
+        app.querySelector('#until').hidden = !e.repeat;
+        app.querySelector('#repeat-hint').textContent = e.repeat && /^\d{4}-\d{2}-\d{2}$/.test(e.start) ? repeatText(e) : '';
+      }
       // 選了課程而標題還空著：用課程名稱當標題
       if (ev.target.name === 'courseId' && ev.target.value && !f.title.value.trim()) { const c = findCourse(ev.target.value); if (c) f.title.value = c.title; }
       autosave(300);
