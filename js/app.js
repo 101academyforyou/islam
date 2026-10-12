@@ -1693,7 +1693,7 @@ function editSchedule(c) {
     const box = document.createElement('div');
     box.className = 'modal-backdrop';
     box.innerHTML = '<form class="modal card pad" role="dialog" aria-modal="true" aria-labelledby="sc-title">' +
-      `<h3 id="sc-title">⏰ 加入我的課表</h3><p class="muted small">「${esc(c.title)}」每週要在什麼時候學習？加入後會顯示在「我的課表」和行事曆（只有你看得到），也可以加到手機日曆提醒自己。</p>` +
+      `<h3 id="sc-title">⏰ ${mySchedules[c.id] ? '修改我的課表' : '加入我的課表'}</h3><p class="muted small">「${esc(c.title)}」每週要在什麼時候學習？加入後會顯示在「我的課表」和行事曆（只有你看得到），也可以加到手機日曆提醒自己。</p>` +
       '<div class="day-picks">' + WEEK.map((w, i) => `<label><input type="checkbox" name="d" value="${i}" ${cur.days.includes(i) ? 'checked' : ''}/><span>${w}</span></label>`).join('') + '</div>' +
       `<div class="two"><label>時間<input class="input" type="time" name="time" value="${esc(cur.time)}" required/></label>` +
       `<label>每次<select class="input" name="minutes">${[15, 20, 30, 45, 60, 90, 120].map((m) => `<option value="${m}" ${m === cur.minutes ? 'selected' : ''}>${m} 分鐘</option>`).join('')}</select></label></div>` +
@@ -1701,6 +1701,7 @@ function editSchedule(c) {
       `<label>結束日期 <span class="muted small">可留空</span><input class="input" type="date" name="until" value="${esc(cur.until || '')}"/></label></div>` +
       '<p class="small" id="sc-sum"></p>' +
       '<div class="lesson-nav"><button class="btn btn-sm">儲存</button>' +
+      (mySchedules[c.id] ? `<a class="btn btn-ghost btn-sm" href="#/learn/${esc(c.id)}" id="sc-go">▶ 去上課</a>` : '') +
       (mySchedules[c.id] ? '<button type="button" class="btn btn-ghost btn-sm" id="sc-gcal">＋ 加入 Google 日曆</button><button type="button" class="btn btn-ghost btn-sm" id="sc-ics">⬇ 下載日曆檔</button><button type="button" class="btn btn-ghost btn-sm" id="sc-del">從課表移除</button>' : '') +
       '<button type="button" class="btn btn-ghost btn-sm" id="sc-cancel">取消</button></div></form>';
     const f = box.querySelector('form');
@@ -1724,6 +1725,7 @@ function editSchedule(c) {
     };
     box.onclick = async (e) => {
       if (e.target === box || e.target.id === 'sc-cancel') return close(false);
+      if (e.target.id === 'sc-go') { e.preventDefault(); close(false); return go('/learn/' + c.id); }
       if (e.target.id === 'sc-gcal') addToGoogleCalendar([gcalStudyOf(c, mySchedules[c.id])], studyGoogleUrl(c, mySchedules[c.id]), e.target);
       if (e.target.id === 'sc-ics') downloadStudyIcs(c.id);
       if (e.target.id === 'sc-del' && confirm('把這門課從每週課表移除？')) { if (await save(null)) { toast('已從課表移除'); close(true); } }
@@ -2218,7 +2220,7 @@ pages.plan = async (app, ym) => {
       const evs = occ.filter((o) => o.start === day);
       cells.push(`<button type="button" class="cal-cell${day === todayStr() ? ' today' : ''}${day === picked ? ' picked' : ''}${evs.length ? ' has' : ''}" data-day="${day}">` +
         `<span class="cal-d">${d}</span>` +
-        evs.slice(0, 3).map((o) => `<span class="cal-ev ev-study" title="${esc(o.title)}">${esc(o.startTime)} ${esc(o.title)}</span>`).join('') +
+        evs.slice(0, 3).map((o) => `<span class="cal-ev ev-study drag-ev" data-cid="${esc(o.id)}" data-day="${day}" title="${esc(o.title)}（點一下修改，可拖曳到其他天）">${esc(o.startTime)} ${esc(o.title)}</span>`).join('') +
         (evs.length > 3 ? `<span class="cal-more">還有 ${evs.length - 3} 個</span>` : '') +
         `<span class="cal-dots">${evs.slice(0, 4).map(() => '<i class="ev-study"></i>').join('')}</span></button>`);
     }
@@ -2240,17 +2242,17 @@ pages.plan = async (app, ym) => {
     const hours = [];
     for (let t = lo; t < hi; t += 60) hours.push(t);
     const nowMin = now.getHours() * 60 + now.getMinutes();
-    return '<div class="wk" style="--wk-h:' + H + 'px">' +
+    return `<div class="wk" data-lo="${lo}" data-h="${H}" style="--wk-h:${H}px">` +
       '<div class="wk-head"><span></span>' + days.map((d) => { const [, mm, dd] = parseDay(d); return `<span class="${d === todayStr() ? 'today' : ''}">${WEEK[new Date(...(([a, b, c]) => [a, b - 1, c])(parseDay(d))).getDay()]}<b><i class="wk-m">${mm}/</i>${dd}</b></span>`; }).join('') + '</div>' +
       `<div class="wk-body" style="height:${hours.length * H}px">` +
       '<div class="wk-times">' + hours.map((t) => `<span style="top:${(t - lo) / 60 * H}px">${pad2(t / 60)}:00</span>`).join('') + '</div>' +
-      days.map((d) => `<div class="wk-col${d === todayStr() ? ' today' : ''}">` +
+      days.map((d) => `<div class="wk-col${d === todayStr() ? ' today' : ''}" data-col="${d}">` +
         hours.map((t) => `<i class="wk-line" style="top:${(t - lo) / 60 * H}px"></i>`).join('') +
         (d === todayStr() && nowMin >= lo && nowMin <= hi ? `<i class="wk-now" style="top:${(nowMin - lo) / 60 * H}px"></i>` : '') +
         occ.filter((o) => o.start === d).map((o) => {
           const s = toMin(o.startTime), e = Math.max(s + 15, toMin(o.endTime) || s + 30);
-          return `<a class="wk-ev ev-study" href="#/learn/${o.id}" style="top:${(s - lo) / 60 * H}px;height:${(e - s) / 60 * H - 2}px" title="${esc(o.title)} ${o.startTime}–${o.endTime}">` +
-            `<b>${esc(o.title)}</b><small>${o.startTime}–${o.endTime}</small></a>`;
+          return `<div class="wk-ev ev-study drag-ev" data-cid="${esc(o.id)}" data-day="${d}" style="top:${(s - lo) / 60 * H}px;height:${(e - s) / 60 * H - 2}px" title="${esc(o.title)} ${o.startTime}–${o.endTime}（點一下修改，可拖曳調整日期和時間）">` +
+            `<b>${esc(o.title)}</b><small>${o.startTime}–${o.endTime}</small></div>`;
         }).join('') + '</div>').join('') + '</div></div>';
   }
   function draw() {
@@ -2274,9 +2276,80 @@ pages.plan = async (app, ym) => {
           '<p class="small"><button type="button" class="link small" id="week-ics">⬇ 下載日曆檔（Apple／Outlook）</button></p>'
         : '<p class="muted small">在「我的學習區」或課程頁按「⏰ 加入我的課表」，就能設定每週固定的學習時間。</p>') +
       '</div>';
-    if (view === 'week') { const body = app.querySelector('.wk-ev'); if (body) body.scrollIntoView({ block: 'nearest' }); }
   }
+  // 點課程：修改；拖曳課程：月曆改成另一個星期幾，週曆還可以上下調整時間（每 15 分鐘）
+  const weekdayOf = (day) => new Date(...(([a, b, c]) => [a, b - 1, c])(parseDay(day))).getDay();
+  let drag = null, justDragged = false;
+  app.addEventListener('pointerdown', (e) => {
+    const chip = e.target.closest('.drag-ev');
+    if (!chip || e.button > 0) return;
+    const r = chip.getBoundingClientRect();
+    drag = { chip, cid: chip.dataset.cid, from: chip.dataset.day, x: e.clientX, y: e.clientY, dy: e.clientY - r.top, moved: false, ghost: null };
+  });
+  app.addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    if (!drag.moved && Math.hypot(e.clientX - drag.x, e.clientY - drag.y) < 6) return;
+    e.preventDefault();
+    if (!drag.moved) {
+      drag.moved = true;
+      const r = drag.chip.getBoundingClientRect();
+      drag.ghost = drag.chip.cloneNode(true);
+      Object.assign(drag.ghost.style, { position: 'fixed', left: r.left + 'px', top: r.top + 'px', width: r.width + 'px', height: r.height + 'px', zIndex: 80, pointerEvents: 'none', opacity: '.85', boxShadow: '0 8px 20px rgba(0,0,0,.2)' });
+      document.body.appendChild(drag.ghost);
+      drag.chip.classList.add('drag-src');
+      drag.ox = e.clientX - r.left;
+    }
+    drag.ghost.style.left = (e.clientX - drag.ox) + 'px';
+    drag.ghost.style.top = (e.clientY - drag.dy) + 'px';
+    app.querySelectorAll('.drop-on').forEach((x) => x.classList.remove('drop-on'));
+    const over = document.elementFromPoint(e.clientX, e.clientY);
+    const tgt = over && (over.closest('[data-day].cal-cell') || over.closest('[data-col]'));
+    if (tgt) tgt.classList.add('drop-on');
+  });
+  const endDrag = async (e) => {
+    if (!drag) return;
+    const d = drag;
+    drag = null;
+    app.querySelectorAll('.drop-on').forEach((x) => x.classList.remove('drop-on'));
+    if (!d.moved) return; // 只是點一下：交給 click 處理（修改）
+    justDragged = true;
+    setTimeout(() => { justDragged = false; }, 50);
+    d.ghost.remove();
+    d.chip.classList.remove('drag-src');
+    const over = document.elementFromPoint(e.clientX, e.clientY);
+    const cell = over && over.closest('[data-day].cal-cell');
+    const col = over && over.closest('[data-col]');
+    const toDay = cell ? cell.dataset.day : col ? col.dataset.col : '';
+    const sc = mySchedules[d.cid], c = findCourse(d.cid);
+    if (!toDay || !sc || !c) return;
+    let time = sc.time;
+    if (col) { // 週曆：依放開的位置算時間
+      const wk = app.querySelector('.wk'), lo = +wk.dataset.lo, H = +wk.dataset.h;
+      const top = e.clientY - d.dy - col.getBoundingClientRect().top;
+      const mins = Math.max(0, Math.min(24 * 60 - 15, Math.round((lo + top / H * 60) / 15) * 15));
+      time = `${pad2(Math.floor(mins / 60))}:${pad2(mins % 60)}`;
+    }
+    const fromW = weekdayOf(d.from), toW = weekdayOf(toDay);
+    if (fromW === toW && time === sc.time) return;
+    const prev = { ...sc };
+    const days = [...new Set([...sc.days.filter((x) => x !== fromW), toW])].sort();
+    mySchedules[d.cid] = { ...sc, days, time, start: sc.start && sc.start > toDay ? toDay : sc.start };
+    try {
+      await saveSchedules();
+      toast(`已改成 ${scheduleText(mySchedules[d.cid])}`);
+    } catch (err) {
+      mySchedules[d.cid] = prev;
+      toast('儲存失敗：' + (err.code || err.message));
+    }
+    draw();
+  };
+  app.addEventListener('pointerup', endDrag);
+  app.addEventListener('pointercancel', (e) => { if (drag && drag.ghost) drag.ghost.remove(); if (drag) drag.chip.classList.remove('drag-src'); drag = null; app.querySelectorAll('.drop-on').forEach((x) => x.classList.remove('drop-on')); });
+
   app.onclick = async (e) => {
+    if (justDragged) return;
+    const chip = e.target.closest('.drag-ev');
+    if (chip) { e.preventDefault(); const c = findCourse(chip.dataset.cid); if (c && await editSchedule(c)) draw(); return; }
     const v = e.target.closest('[data-view]');
     if (v) { view = v.dataset.view; try { localStorage.setItem('isl_plan_view', view); } catch (err) {} picked = ''; return draw(); }
     const nav = e.target.closest('[data-nav]');
