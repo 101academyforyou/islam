@@ -17,6 +17,7 @@ let auth = null, db = null, fbApp = null;
 let user = null;         // 目前登入的 Firebase 使用者
 let joined = [];         // 已加入的課程 id（從課程頁按「加入課程」）
 let joinedAt = {};       // 課程 id → 加入時間（毫秒）
+let myFolders = [];      // 學生自己建的資料夾 [{ id, name, courses: [課程id…] }]（islam_prefs/{Email}.folders）
 let myOrder = [];        // 學生自己在「我的學習區」拖曳排好的順序（islam_prefs/{Email}.order）
 let accessReady = Promise.resolve();
 const videoCache = {};   // 課程 id → { 單元 id: YouTube ID }
@@ -130,6 +131,7 @@ async function loadAccess() {
   joined = [];
   joinedAt = {};
   myOrder = [];
+  myFolders = [];
   if (!isVerified()) return;
   const email = user.email.toLowerCase();
   await Promise.all([
@@ -140,6 +142,7 @@ async function loadAccess() {
     }).catch((e) => console.error(e)),
     fb.getDoc(fb.doc(db, COL.prefs, email)).then((snap) => {
       myOrder = snap.exists() ? (snap.data().order || []) : [];
+      myFolders = snap.exists() ? (snap.data().folders || []) : [];
     }).catch((e) => console.error(e))
   ]);
   syncStudent(); // 補齊／更新管理者的學生名單（不必等它完成）
@@ -201,9 +204,11 @@ function myCourses() {
   const rank = (c) => { const i = myOrder.indexOf(c.id); return i === -1 ? 1e6 + joined.indexOf(c.id) : i; };
   return list.sort((a, b) => rank(a) - rank(b));
 }
-async function saveOrder(ids) {
-  myOrder = ids;
-  await fb.setDoc(fb.doc(db, COL.prefs, user.email.toLowerCase()), { order: ids, updatedAt: Date.now() });
+// 儲存學習區的排列：未分類的順序 + 資料夾（各自的課程順序）
+async function saveArea(order, folders) {
+  myOrder = order;
+  myFolders = folders;
+  await fb.setDoc(fb.doc(db, COL.prefs, user.email.toLowerCase()), { order, folders, updatedAt: Date.now() });
 }
 
 // 從 Firestore 讀取課程目錄；資料庫還沒有課程時，沿用 data.js
@@ -476,75 +481,166 @@ pages.verify = (app) => {
 pages.my = (app) => {
   if (!user) return go('/login?next=/my');
   if (!isVerified()) return pages.verify(app);
-  const list = myCourses();
+  const all = myCourses();
+  const has = (id) => all.some((c) => c.id === id);
+  // 資料夾裡只留還在學習區的課程；同一門課只放一個地方
+  const filed = new Set();
+  const folders = myFolders.map((f) => ({ ...f, courses: (f.courses || []).filter((id) => has(id) && !filed.has(id) && filed.add(id)) }));
+  const unfiled = all.filter((c) => !filed.has(c.id));
+  const collapsedKey = 'isl_folds_' + user.uid;
+  let collapsed = [];
+  try { collapsed = JSON.parse(localStorage.getItem(collapsedKey)) || []; } catch (e) {}
+
+  const card = (c, fid) => {
+    const p = progress(c), n = c.unlisted ? 0 : stepOf(c);
+    const hay = [c.title, c.subtitle, c.category, c.level, c.instructor, ...lessonsOf(c).map((l) => l.title)].join(' ').toLowerCase();
+    return `<div class="card step my-card" data-id="${esc(c.id)}" data-q="${esc(hay)}">` +
+      '<div class="my-tools"><span class="drag-handle" title="拖曳調整順序或移到資料夾" aria-label="拖曳">⠿</span>' +
+      '<button type="button" class="icon-btn" data-move="-1" aria-label="往上移" title="往上移">↑</button>' +
+      '<button type="button" class="icon-btn" data-move="1" aria-label="往下移" title="往下移">↓</button></div>' +
+      `<a href="#/learn/${c.id}" draggable="false">${thumb(c)}</a><div class="step-body">` +
+      `<span class="tag">${[n ? `第 ${n} 階段` : '', c.category, c.level].filter(Boolean).map(esc).join(' · ')}</span>` +
+      `<h3><a href="#/learn/${c.id}" draggable="false">${esc(c.title)}</a></h3>` +
+      `<p class="muted small">${esc(c.subtitle || '')}</p><p class="muted small">${lessonsOf(c).length} 個單元${minutesText(c)}</p>` +
+      `<div class="bar"><i style="width:${p}%"></i></div><p class="small owned">${p === 100 ? '✓ 已完成' : `進度 ${p}%`}</p>` +
+      `<label class="small muted move-folder">📁 <select data-folder-pick aria-label="移到資料夾"><option value="">未分類</option>` +
+      folders.map((f) => `<option value="${esc(f.id)}"${f.id === fid ? ' selected' : ''}>${esc(f.name)}</option>`).join('') + '</select></label></div>' +
+      '<button type="button" class="icon-btn my-leave" data-leave aria-label="移出學習區" title="移出學習區">✕</button></div>';
+  };
+  const folderBox = (f) => {
+    const list = f.courses.map((id) => all.find((c) => c.id === id));
+    return `<section class="folder${collapsed.includes(f.id) ? ' closed' : ''}" data-fid="${esc(f.id)}">` +
+      `<div class="folder-head"><button type="button" class="folder-toggle" data-toggle aria-label="展開或收合">▾</button>` +
+      `<strong class="folder-name">📁 ${esc(f.name)}</strong><span class="muted small">${list.length} 門課</span>` +
+      '<span class="folder-actions"><button type="button" class="btn btn-ghost btn-sm" data-rename>重新命名</button>' +
+      '<button type="button" class="btn btn-ghost btn-sm" data-delfolder>刪除資料夾</button></span></div>' +
+      `<div class="path my-list" data-list="${esc(f.id)}">${list.map((c) => card(c, f.id)).join('')}` +
+      '<p class="folder-empty muted small">把課程拖到這裡，或在課程的「📁」選擇這個資料夾。</p></div></section>';
+  };
+
   app.innerHTML = '<div class="container"><div class="row-between"><h1>我的學習區</h1>' +
-    '<a class="btn btn-ghost btn-sm" href="#/">＋ 加入更多課程</a></div>' +
-    (list.length
+    '<span class="lesson-nav"><button type="button" class="btn btn-ghost btn-sm" id="newfolder">＋ 新增資料夾</button>' +
+    '<a class="btn btn-ghost btn-sm" href="#/">＋ 加入更多課程</a></span></div>' +
+    (all.length
       ? '<input class="input my-search" id="myq" type="search" placeholder="搜尋我的課程…" aria-label="搜尋我的課程" autocomplete="off"/>' +
-        '<p class="muted small" id="myhint">按住 ⠿ 拖曳，或按 ↑ ↓ 調整順序，排成你想要的學習順序；順序會自動儲存。</p>' +
+        '<p class="muted small" id="myhint">按住 ⠿ 拖曳可調整順序、移進或移出資料夾；也可以按 ↑ ↓，或在課程的「📁」選擇資料夾。會自動儲存。</p>' +
         '<p class="muted" id="mynone" hidden>找不到符合的課程。</p>' +
-        '<div class="path my-list" id="mine">' + list.map((c) => {
-          const p = progress(c), n = c.unlisted ? 0 : stepOf(c);
-          const hay = [c.title, c.subtitle, c.category, c.level, c.instructor, ...lessonsOf(c).map((l) => l.title)].join(' ').toLowerCase();
-          return `<div class="card step my-card" data-id="${esc(c.id)}" data-q="${esc(hay)}">` +
-            '<div class="my-tools"><span class="drag-handle" title="拖曳調整順序" aria-label="拖曳調整順序">⠿</span>' +
-            '<button type="button" class="icon-btn" data-move="-1" aria-label="往上移" title="往上移">↑</button>' +
-            '<button type="button" class="icon-btn" data-move="1" aria-label="往下移" title="往下移">↓</button></div>' +
-            `<a href="#/learn/${c.id}" draggable="false">${thumb(c)}</a><div class="step-body">` +
-            `<span class="tag">${[n ? `第 ${n} 階段` : '', c.category, c.level].filter(Boolean).map(esc).join(' · ')}</span>` +
-            `<h3><a href="#/learn/${c.id}" draggable="false">${esc(c.title)}</a></h3>` +
-            `<p class="muted small">${esc(c.subtitle || '')}</p><p class="muted small">${lessonsOf(c).length} 個單元${minutesText(c)}</p>` +
-            `<div class="bar"><i style="width:${p}%"></i></div><p class="small owned">${p === 100 ? '✓ 已完成' : `進度 ${p}%`}</p></div>` +
-            '<button type="button" class="icon-btn my-leave" data-leave aria-label="移出學習區" title="移出學習區">✕</button></div>';
-        }).join('') + '</div>'
+        '<div id="area">' + folders.map(folderBox).join('') +
+        (folders.length ? '<h3 class="unfiled-title">未分類</h3>' : '') +
+        `<div class="path my-list" data-list="">${unfiled.map((c) => card(c, '')).join('')}</div></div>`
       : '<div class="card pad"><p>你的學習區還沒有課程。</p>' +
         '<p class="muted small">在學習路線的課程卡片按「＋ 加入學習區」，或到課程頁按「加入課程」。建議從第 1 階段開始。</p>' +
         '<a href="#/" class="btn btn-sm">查看學習路線</a></div>') + '</div>';
 
-  const grid = app.querySelector('#mine');
-  if (!grid) return;
-  // 搜尋：只顯示符合的課程；搜尋時先隱藏排序按鈕，清除搜尋後才能調整順序
+  const area = app.querySelector('#area');
+  // 從畫面讀出目前的排列並儲存
+  let saving = Promise.resolve();
+  const snapshot = () => {
+    const ids = (list) => [...list.querySelectorAll(':scope > .my-card')].map((el) => el.dataset.id);
+    const order = area ? ids(area.querySelector('.my-list[data-list=""]')) : [];
+    const fs = [...(area ? area.querySelectorAll('.folder') : [])].map((sec) => {
+      const f = folders.find((x) => x.id === sec.dataset.fid);
+      return { id: f.id, name: f.name, courses: ids(sec.querySelector('.my-list')) };
+    });
+    return { order, folders: fs };
+  };
+  const persist = (redraw = false) => {
+    const { order, folders: fs } = area ? snapshot() : { order: myOrder, folders };
+    fs.forEach((f) => { const o = folders.find((x) => x.id === f.id); if (o) o.courses = f.courses; });
+    saving = saving.then(() => saveArea(order, fs)).then(() => { if (redraw) pages.my(app); })
+      .catch((err) => toast('儲存失敗：' + (err.code || err.message) + '（請確認已部署最新的 Firestore 規則）'));
+  };
+  const saveFolders = (fs, order) => {
+    saving = saving.then(() => saveArea(order, fs)).then(() => pages.my(app))
+      .catch((err) => toast('儲存失敗：' + (err.code || err.message) + '（請確認已部署最新的 Firestore 規則）'));
+  };
+
+  app.querySelector('#newfolder').onclick = () => {
+    const name = (prompt('資料夾名稱') || '').trim().slice(0, 40);
+    if (!name) return;
+    if (folders.length >= 30) return toast('資料夾最多 30 個');
+    const cur = area ? snapshot() : { order: unfiled.map((c) => c.id), folders: [] };
+    saveFolders([...cur.folders, { id: newId('f'), name, courses: [] }], cur.order);
+  };
+  if (!area) return;
+
+  // 搜尋：只顯示符合的課程；搜尋時暫停排序
   const hint = app.querySelector('#myhint'), none = app.querySelector('#mynone');
   const hintText = hint.textContent;
   app.querySelector('#myq').oninput = (e) => {
     const words = e.target.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
     let shown = 0;
-    [...grid.children].forEach((card) => {
-      const ok = words.every((w) => card.dataset.q.includes(w));
-      card.hidden = !ok;
+    area.querySelectorAll('.my-card').forEach((cardEl) => {
+      const ok = words.every((w) => cardEl.dataset.q.includes(w));
+      cardEl.hidden = !ok;
       if (ok) shown++;
     });
-    grid.classList.toggle('filtering', words.length > 0);
+    area.querySelectorAll('.folder').forEach((sec) => {
+      const any = !!sec.querySelector('.my-card:not([hidden])');
+      sec.hidden = words.length > 0 && !any;
+      sec.classList.toggle('searching', words.length > 0);
+    });
+    area.classList.toggle('filtering', words.length > 0);
     none.hidden = shown > 0;
     hint.textContent = words.length ? '搜尋中無法調整順序，清除搜尋後就能拖曳或按 ↑ ↓。' : hintText;
   };
-  let saving = Promise.resolve();
-  const persist = () => {
-    const ids = [...grid.children].map((el) => el.dataset.id);
-    saving = saving.then(() => saveOrder(ids)).catch((err) => toast('順序儲存失敗：' + (err.code || err.message)));
-  };
-  // 往前／往後移、移出
-  grid.onclick = async (e) => {
-    const card = e.target.closest('.my-card');
-    if (!card) return;
+
+  area.onclick = async (e) => {
+    const sec = e.target.closest('.folder');
+    if (sec && e.target.closest('[data-toggle], .folder-name')) {
+      sec.classList.toggle('closed');
+      collapsed = [...area.querySelectorAll('.folder.closed')].map((x) => x.dataset.fid);
+      try { localStorage.setItem(collapsedKey, JSON.stringify(collapsed)); } catch (err) {}
+      return;
+    }
+    if (sec && e.target.closest('[data-rename]')) {
+      const f = folders.find((x) => x.id === sec.dataset.fid);
+      const name = (prompt('資料夾名稱', f.name) || '').trim().slice(0, 40);
+      if (!name || name === f.name) return;
+      const cur = snapshot();
+      saveFolders(cur.folders.map((x) => (x.id === f.id ? { ...x, name } : x)), cur.order);
+      return;
+    }
+    if (sec && e.target.closest('[data-delfolder]')) {
+      const f = folders.find((x) => x.id === sec.dataset.fid);
+      if (!confirm(`刪除資料夾「${f.name}」？裡面的課程會移回「未分類」，不會移出學習區。`)) return;
+      const cur = snapshot();
+      const moved = (cur.folders.find((x) => x.id === f.id) || {}).courses || [];
+      saveFolders(cur.folders.filter((x) => x.id !== f.id), [...cur.order, ...moved]);
+      return;
+    }
+    const cardEl = e.target.closest('.my-card');
+    if (!cardEl) return;
     const mv = e.target.closest('[data-move]');
     if (mv) {
-      const sib = mv.dataset.move === '-1' ? card.previousElementSibling : card.nextElementSibling;
+      const step = mv.dataset.move === '-1' ? 'previousElementSibling' : 'nextElementSibling';
+      let sib = cardEl[step];
+      while (sib && !sib.classList.contains('my-card')) sib = sib[step];
       if (!sib) return;
-      if (mv.dataset.move === '-1') grid.insertBefore(card, sib); else grid.insertBefore(sib, card);
+      if (mv.dataset.move === '-1') sib.before(cardEl); else sib.after(cardEl);
       persist();
       return;
     }
     if (e.target.closest('[data-leave]')) {
-      const c = findCourse(card.dataset.id);
+      const c = findCourse(cardEl.dataset.id);
       if (!confirm(`把「${c.title}」移出學習區？（之後可以再加入，學習進度會保留）`)) return;
-      try { await leaveCourse(c); card.remove(); persist(); toast('已移出學習區'); if (!grid.children.length) pages.my(app); }
+      try { await leaveCourse(c); cardEl.remove(); persist(true); toast('已移出學習區'); }
       catch (err) { toast('移出失敗：' + (err.code || err.message) + '（請確認已部署最新的 Firestore 規則）'); }
     }
   };
-  // 拖曳（滑鼠與觸控都可以）：按住 ⠿ 移動
+  // 「📁」選擇資料夾
+  area.onchange = (e) => {
+    const sel = e.target.closest('[data-folder-pick]');
+    if (!sel) return;
+    const cardEl = sel.closest('.my-card');
+    const list = area.querySelector(`.my-list[data-list="${CSS.escape(sel.value)}"]`);
+    const empty = list.querySelector(':scope > .folder-empty');
+    if (empty) empty.before(cardEl); else list.appendChild(cardEl);
+    persist(true);
+  };
+  // 拖曳（滑鼠與觸控）：按住 ⠿ 移動，可以在資料夾之間搬移；拖到收合的資料夾標題上就放進該資料夾
   let dragging = null;
-  grid.addEventListener('pointerdown', (e) => {
+  area.addEventListener('pointerdown', (e) => {
     const h = e.target.closest('.drag-handle');
     if (!h) return;
     e.preventDefault();
@@ -552,23 +648,39 @@ pages.my = (app) => {
     dragging.classList.add('dragging');
     h.setPointerCapture(e.pointerId);
   });
-  grid.addEventListener('pointermove', (e) => {
+  area.addEventListener('pointermove', (e) => {
     if (!dragging) return;
     const over = document.elementFromPoint(e.clientX, e.clientY);
-    const target = over && over.closest('.my-card');
-    if (!target || target === dragging || target.parentNode !== grid) return;
-    const r = target.getBoundingClientRect();
-    const after = (e.clientY - r.top) / r.height > 0.5 || (Math.abs(e.clientY - (r.top + r.height / 2)) < r.height / 4 && (e.clientX - r.left) / r.width > 0.5);
-    grid.insertBefore(dragging, after ? target.nextSibling : target);
+    if (!over) return;
+    area.querySelectorAll('.drop-target').forEach((x) => x.classList.remove('drop-target'));
+    const target = over.closest('.my-card');
+    if (target && target !== dragging && area.contains(target)) {
+      const r = target.getBoundingClientRect();
+      if (e.clientY > r.top + r.height / 2) target.after(dragging); else target.before(dragging);
+      return;
+    }
+    const head = over.closest('.folder-head');
+    if (head) { head.parentNode.classList.add('drop-target'); return; }
+    const list = over.closest('.my-list');
+    if (list && area.contains(list) && !list.contains(dragging)) {
+      const empty = list.querySelector(':scope > .folder-empty');
+      if (empty) empty.before(dragging); else list.appendChild(dragging);
+    }
   });
-  const end = () => {
+  const end = (e) => {
     if (!dragging) return;
+    const drop = area.querySelector('.folder.drop-target');
+    if (drop) {
+      const list = drop.querySelector('.my-list');
+      list.querySelector(':scope > .folder-empty').before(dragging);
+      drop.classList.remove('drop-target');
+    }
     dragging.classList.remove('dragging');
     dragging = null;
-    persist();
+    persist(true);
   };
-  grid.addEventListener('pointerup', end);
-  grid.addEventListener('pointercancel', end);
+  area.addEventListener('pointerup', end);
+  area.addEventListener('pointercancel', end);
 };
 
 // 上課頁：從 Firestore 讀取不公開的 YouTube 影片 ID
