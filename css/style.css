@@ -570,3 +570,8 @@ table.orders th { font-size: 12px; color: var(--muted); background: var(--soft);
   .wk-head span b { font-size: .9rem; }
   .my-timetable .cal-filters { margin-left: 0; }
 }
+/* 我的課表：點一下修改、拖曳調整 */
+.drag-ev { cursor: grab; touch-action: none; user-select: none; }
+.drag-ev:hover { filter: brightness(.97); outline: 1px solid color-mix(in srgb, var(--ev) 50%, transparent); }
+.drag-ev.drag-src { opacity: .35; }
+.cal-cell.drop-on, .wk-col.drop-on { background: color-mix(in srgb, #ec4899 12%, transparent); outline: 2px dashed #ec4899; outline-offset: -2px; }
