@@ -936,7 +936,7 @@ function downloadIcs(e) {
 
 pages.calendar = async (app, ym) => {
   app.innerHTML = '<div class="container"><p class="muted">載入行事曆中…</p></div>';
-  const list = await loadEvents();
+  let list = await loadEvents();
   if (!document.body.contains(app)) return;
   const now = new Date();
   let [y, m] = /^\d{4}-\d{2}$/.test(ym || '') ? ym.split('-').map(Number) : [now.getFullYear(), now.getMonth() + 1];
@@ -949,9 +949,12 @@ pages.calendar = async (app, ym) => {
   if (isVerified()) await loadSessions();
   const hasStudy = !!user && (Object.keys(mySchedules).some((id) => hasJoined(id) && findCourse(id)) || mySessions.some((it) => sessionRef(it)));
   try { if (localStorage.getItem('isl_show_study') === '0') hidden.add('我的學習'); } catch (e) {} // 舊設定
-  const types = EVENT_TYPES.filter((t) => list.some((e) => e.type === t));
-  const cities = CITIES.filter((c) => list.some((e) => e.city === c));
+  let types = [], cities = [];
   function draw() {
+    // 管理者在行事曆上移動、複製、刪除活動後，活動清單會更新
+    list = eventCache || [];
+    types = EVENT_TYPES.filter((t) => list.some((e) => e.type === t));
+    cities = CITIES.filter((c) => list.some((e) => e.city === c));
     const first = new Date(y, m - 1, 1), days = new Date(y, m, 0).getDate();
     const from = `${y}-${pad2(m)}-01`, to = `${y}-${pad2(m)}-${pad2(days)}`;
     const shownList = list.filter((e) => !hidden.has(e.type || '其他') && (!city || e.city === city));
@@ -965,7 +968,14 @@ pages.calendar = async (app, ym) => {
       const evs = eventsOn(occ, day);
       cells.push(`<button type="button" class="cal-cell${day === todayStr() ? ' today' : ''}${day === picked ? ' picked' : ''}${evs.length ? ' has' : ''}" data-day="${day}">` +
         `<span class="cal-d">${d}</span>` +
-        evs.slice(0, 3).map((e) => `<span class="cal-ev ${e.study ? 'ev-study' : typeClass(e.type)}" title="${esc(e.title)}">${e.session ? '📖 ' : e.study ? '⏰ ' : ''}${e.allDay || !e.startTime || e.start !== day ? '' : esc(e.startTime) + ' '}${esc(e.title)}</span>`).join('') +
+        evs.slice(0, 3).map((e) => {
+          // 自己的課表：點一下修改、拖曳只移動這一次、✕ 刪除這一次；活動：管理者可以拖曳、複製、刪除，其他人點一下看活動
+          const edit = e.study || isAdmin();
+          const tip = e.study ? '（點一下修改，拖曳只移動這一次）' : isAdmin() ? '（點一下編輯，可以拖曳到別天）' : '';
+          return `<span class="cal-ev ${e.study ? 'ev-study' + (e.session ? ' ev-unit' : '') : typeClass(e.type)} drag-ev${edit ? '' : ' ev-view'}" ${calChipAttrs(e, day)} title="${esc(e.title)}${tip}">` +
+            `${e.session ? '📖 ' : e.study ? '⏰ ' : ''}${e.moved ? '↪ ' : ''}${e.extra != null ? '＋ ' : ''}${e.allDay || !e.startTime || (e.start !== day && !e.study) ? '' : esc(e.startTime) + ' '}${esc(e.title)}` +
+            (edit ? `<i class="ev-del" role="button" aria-label="${e.study ? '刪除這一次' : '刪除活動'}" title="${e.study ? '刪除這一次' : '刪除活動'}">✕</i>` : '') + '</span>';
+        }).join('') +
         (evs.length > 3 ? `<span class="cal-more">還有 ${evs.length - 3} 個</span>` : '') +
         `<span class="cal-dots">${evs.slice(0, 4).map((e) => `<i class="${e.study ? 'ev-study' : typeClass(e.type)}"></i>`).join('')}</span></button>`);
     }
@@ -982,6 +992,7 @@ pages.calendar = async (app, ym) => {
       `<h2>${y} 年 ${m} 月</h2><button type="button" class="btn btn-ghost btn-sm" data-nav="1" aria-label="下個月">›</button>` +
       '<button type="button" class="btn btn-ghost btn-sm" data-nav="0">今天</button>' +
       (filters ? `<span class="cal-filters">${filters}</span>` : '') + '</div>' +
+      clipBar('點月曆上的日期') +
       ((types.length || hasStudy) ? '<div class="cal-legend" role="group" aria-label="顯示的類型">' +
         (hasStudy ? `<label class="type-check ev-study"><input type="checkbox" data-show="我的學習" ${hidden.has('我的學習') ? '' : 'checked'}/><i class="dot-sw ev-study"></i>我的課表<span class="muted small">（只有你看得到）</span></label>` : '') +
         types.map((t) => `<label class="type-check ${typeClass(t)}"><input type="checkbox" data-show="${esc(t)}" ${hidden.has(t) ? '' : 'checked'}/><i class="dot-sw ${typeClass(t)}"></i>${esc(t)}</label>`).join('') +
@@ -993,7 +1004,9 @@ pages.calendar = async (app, ym) => {
           : `<p class="muted">${hidden.size || city ? '這個月沒有符合條件的活動。' : '這個月還沒有活動。'}</p>`)) +
       '</div>';
   }
-  app.onclick = (e) => {
+  const ops = bindCalOps(app, () => draw());
+  app.onclick = async (e) => {
+    if (await ops.click(e)) return;
     const nav = e.target.closest('[data-nav]');
     if (nav) {
       const n = +nav.dataset.nav;
@@ -2337,6 +2350,265 @@ pages.learn = async (app, id, query, lessonId) => {
   };
 };
 
+/* 我的課表和行事曆共用的日曆操作：點一下修改、✕ 刪除這一次、拖曳移動、複製貼上
+ * 課程（自己的課表）每個人都能操作；活動（data-eid）只有管理者能拖曳、複製、刪除 */
+function bindCalOps(app, draw) {
+  // 日曆上的 ✕：只刪除這一次
+  async function deleteOne(chip) {
+    if (!chip) return;
+    const day = chip.dataset.day;
+    try {
+      if (chip.dataset.eid) { // 活動（管理者）：刪除整個活動
+        const ev = (eventCache || []).find((x) => x.id === chip.dataset.eid);
+        if (!ev || !isAdmin() || !confirm(`刪除活動「${ev.title}」？${ev.repeat ? '（這是重複活動，會刪除所有日期）' : ''}此動作無法復原。`)) return;
+        await fb.deleteDoc(fb.doc(db, COL.events, ev.id));
+        eventCache = eventCache.filter((x) => x.id !== ev.id);
+        toast('已刪除活動');
+        return draw();
+      }
+      if (chip.dataset.sid != null) {
+        const k = +chip.dataset.sid, it = mySessions[k], r = it && sessionRef(it);
+        if (!it || !confirm(`刪除 ${dateLabel(it.date)} ${it.time}「${r ? r.l.title : ''}」？`)) return;
+        await saveSessions(mySessions.filter((_, i) => i !== k));
+      } else {
+        const cid = chip.dataset.cid, sc = mySchedules[cid], c = findCourse(cid);
+        if (!sc || !c || !confirm(`刪除 ${dateLabel(day)}「${c.title}」這一次？（其他週不變）`)) return;
+        const prev = sc;
+        if (chip.dataset.extra != null) {
+          mySchedules[cid] = { ...sc, extras: (sc.extras || []).filter((_, i) => i !== +chip.dataset.extra) };
+        } else {
+          const orig = chip.dataset.orig || day;
+          const moves = { ...(sc.moves || {}) };
+          delete moves[orig];
+          mySchedules[cid] = { ...sc, moves, skips: [...new Set([...(sc.skips || []), orig])].sort().slice(-300) };
+        }
+        try { await saveSchedules(); } catch (err) { mySchedules[cid] = prev; throw err; }
+      }
+      toast('已刪除這一次');
+    } catch (err) { toast('刪除失敗：' + (err.code || err.message)); }
+    draw();
+  }
+
+  // 週曆欄位上某個位置的時間（每 15 分鐘）
+  const timeAt = (col, clientY) => {
+    const wk = app.querySelector('.wk'), lo = +wk.dataset.lo, H = +wk.dataset.h;
+    const mins = Math.max(0, Math.min(24 * 60 - 15, Math.floor((lo + (clientY - col.getBoundingClientRect().top) / H * 60) / 15) * 15));
+    return `${pad2(Math.floor(mins / 60))}:${pad2(mins % 60)}`;
+  };
+  async function pasteClip(day, time) {
+    const clip = planClip;
+    if (!clip) return;
+    const t = time || clip.time;
+    try {
+      if (clip.kind === 'event') { // 活動（管理者）：在這一天建立一份複製（單次活動）
+        const src = (eventCache || []).find((x) => x.id === clip.eid);
+        if (!src || !isAdmin()) return;
+        const len = dayDiff(src.start, endOf(src));
+        const copy = { ...src, start: day, end: len ? addDays(day, len) : '', repeat: '', repeatUntil: '', createdAt: Date.now(), updatedAt: Date.now() };
+        delete copy.id;
+        const id = newId('e');
+        await fb.setDoc(fb.doc(db, COL.events, id), copy);
+        eventCache.push({ ...copy, id });
+        eventCache.sort((x, y) => (x.start + (x.allDay ? '' : x.startTime || '')).localeCompare(y.start + (y.allDay ? '' : y.startTime || '')));
+        toast(`已複製活動到 ${dateLabel(day)}`);
+        return draw();
+      }
+      if (clip.kind === 'series') {
+        const sc = mySchedules[clip.cid];
+        if (!sc) { setPlanClip(null); return draw(); }
+        mySchedules[clip.cid] = { ...sc, extras: [...(sc.extras || []), { date: day, time: t }].slice(-200) };
+        await saveSchedules();
+      } else {
+        if (mySessions.length >= 500) return toast('單元課程最多 500 堂');
+        await saveSessions([...mySessions, { c: clip.c, l: clip.l, date: day, time: t, minutes: clip.minutes }]);
+      }
+      toast(`已貼上到 ${dateLabel(day)} ${t}`);
+    } catch (err) { toast('貼上失敗：' + (err.code || err.message)); }
+    draw();
+  }
+  // 貼上的額外一次：修改日期時間或刪除
+  function editExtra(cid, i) {
+    const sc = mySchedules[cid], c = findCourse(cid), x = sc && (sc.extras || [])[i];
+    if (!x || !c) return Promise.resolve(false);
+    return new Promise((resolve) => {
+      const box = document.createElement('div');
+      box.className = 'modal-backdrop';
+      box.innerHTML = '<form class="modal card pad" role="dialog" aria-modal="true">' +
+        '<button type="button" class="modal-x" data-act="x" aria-label="關閉">✕</button>' +
+        `<h3>⏰ ${esc(c.title)}（額外一次）</h3><p class="muted small">這是複製貼上的額外一堂，不影響每週的系列課程。</p>` +
+        `<div class="two"><label>日期<input class="input" type="date" name="date" value="${esc(x.date)}" required/></label>` +
+        `<label>時間<input class="input" type="time" name="time" value="${esc(x.time)}" required/></label></div>` +
+        `<div class="lesson-nav"><button class="btn btn-sm">儲存</button><a class="btn btn-ghost btn-sm" href="#/learn/${esc(cid)}" data-act="go">▶ 去上課</a>` +
+        '<button type="button" class="btn btn-ghost btn-sm" data-act="copy">📋 複製</button><button type="button" class="btn btn-ghost btn-sm" data-act="del">刪除這一次</button></div></form>';
+      const close = (v) => { box.remove(); resolve(v); };
+      const put = async (extras, msg) => {
+        const prev = mySchedules[cid];
+        mySchedules[cid] = { ...prev, extras };
+        try { await saveSchedules(); toast(msg); close(true); } catch (err) { mySchedules[cid] = prev; toast('儲存失敗：' + (err.code || err.message)); }
+      };
+      box.onclick = (e) => {
+        const act = e.target === box ? 'x' : e.target.dataset.act;
+        if (act === 'x') return close(false);
+        if (act === 'go') { e.preventDefault(); close(false); return go('/learn/' + cid); }
+        if (act === 'copy') { setPlanClip({ kind: 'series', cid, time: x.time, label: `${c.title} ${x.time}` }); return close(true); }
+        if (act === 'del') put(sc.extras.filter((_, j) => j !== i), '已刪除這一次');
+      };
+      box.onsubmit = (e) => { e.preventDefault(); const f = e.target; put(sc.extras.map((y, j) => (j === i ? { date: f.date.value, time: f.time.value } : y)), '已更新'); };
+      document.body.appendChild(box);
+    });
+  }
+  // 鍵盤：滑鼠停在課程上按 Ctrl/⌘+C 複製；停在日期上按 Ctrl/⌘+V 貼上；Esc 取消
+  let hoverChip = null, hoverDay = null, hoverY = 0;
+  app.addEventListener('pointerover', (e) => { hoverChip = e.target.closest('.drag-ev'); hoverDay = e.target.closest('[data-day].cal-cell, [data-col]'); });
+  app.addEventListener('pointermove', (e) => { hoverY = e.clientY; });
+  const onKey = async (e) => {
+    if (!app.isConnected) return document.removeEventListener('keydown', onKey);
+    if (document.querySelector('.modal-backdrop') || /input|textarea|select/i.test((document.activeElement || {}).tagName || '')) return;
+    const mod = e.ctrlKey || e.metaKey;
+    if (mod && e.key.toLowerCase() === 'c' && hoverChip) {
+      e.preventDefault();
+      if (hoverChip.dataset.eid) { const ev = (eventCache || []).find((x) => x.id === hoverChip.dataset.eid); if (ev && isAdmin()) setPlanClip({ kind: 'event', eid: ev.id, time: ev.startTime || '', label: ev.title }); }
+      else if (hoverChip.dataset.sid != null) { const it = mySessions[+hoverChip.dataset.sid], r = it && sessionRef(it); if (r) setPlanClip({ kind: 'unit', c: it.c, l: it.l, time: it.time, minutes: it.minutes || 30, label: `${r.l.title} ${it.time}` }); }
+      else { const c = findCourse(hoverChip.dataset.cid), sc = mySchedules[hoverChip.dataset.cid]; if (c && sc) setPlanClip({ kind: 'series', cid: c.id, time: (hoverChip.textContent.match(/\d\d:\d\d/) || [sc.time])[0], label: `${c.title} ${sc.time}` }); }
+      draw();
+    } else if (mod && e.key.toLowerCase() === 'v' && planClip && hoverDay) {
+      e.preventDefault();
+      await pasteClip(hoverDay.dataset.day || hoverDay.dataset.col, hoverDay.dataset.col ? timeAt(hoverDay, hoverY) : '');
+    } else if (e.key === 'Escape' && planClip) { setPlanClip(null); draw(); }
+  };
+  document.addEventListener('keydown', onKey);
+  const onClip = () => { if (app.isConnected) draw(); else document.removeEventListener('planclip', onClip); };
+  document.addEventListener('planclip', onClip);
+
+  // 點課程：修改；拖曳課程：月曆改成另一個星期幾，週曆還可以上下調整時間（每 15 分鐘）
+  const weekdayOf = (day) => new Date(...(([a, b, c]) => [a, b - 1, c])(parseDay(day))).getDay();
+  let drag = null, justDragged = false;
+  app.addEventListener('pointerdown', (e) => {
+    const chip = e.target.closest('.drag-ev');
+    if (!chip || e.button > 0 || e.target.closest('.ev-del') || (chip.dataset.eid && !isAdmin())) return;
+    const r = chip.getBoundingClientRect();
+    drag = { chip, eid: chip.dataset.eid, cid: chip.dataset.cid, sid: chip.dataset.sid, extra: chip.dataset.extra, orig: chip.dataset.orig, from: chip.dataset.day, x: e.clientX, y: e.clientY, dy: e.clientY - r.top, moved: false, ghost: null };
+  });
+  app.addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    if (!drag.moved && Math.hypot(e.clientX - drag.x, e.clientY - drag.y) < 6) return;
+    e.preventDefault();
+    if (!drag.moved) {
+      drag.moved = true;
+      const r = drag.chip.getBoundingClientRect();
+      drag.ghost = drag.chip.cloneNode(true);
+      Object.assign(drag.ghost.style, { position: 'fixed', left: r.left + 'px', top: r.top + 'px', width: r.width + 'px', height: r.height + 'px', zIndex: 80, pointerEvents: 'none', opacity: '.85', boxShadow: '0 8px 20px rgba(0,0,0,.2)' });
+      document.body.appendChild(drag.ghost);
+      drag.chip.classList.add('drag-src');
+      drag.ox = e.clientX - r.left;
+    }
+    drag.ghost.style.left = (e.clientX - drag.ox) + 'px';
+    drag.ghost.style.top = (e.clientY - drag.dy) + 'px';
+    app.querySelectorAll('.drop-on').forEach((x) => x.classList.remove('drop-on'));
+    const over = document.elementFromPoint(e.clientX, e.clientY);
+    const tgt = over && (over.closest('[data-day].cal-cell') || over.closest('[data-col]'));
+    if (tgt) tgt.classList.add('drop-on');
+  });
+  const endDrag = async (e) => {
+    if (!drag) return;
+    const d = drag;
+    drag = null;
+    app.querySelectorAll('.drop-on').forEach((x) => x.classList.remove('drop-on'));
+    if (!d.moved) return; // 只是點一下：交給 click 處理（修改）
+    justDragged = true;
+    setTimeout(() => { justDragged = false; }, 50);
+    d.ghost.remove();
+    d.chip.classList.remove('drag-src');
+    const over = document.elementFromPoint(e.clientX, e.clientY);
+    const cell = over && over.closest('[data-day].cal-cell');
+    const col = over && over.closest('[data-col]');
+    const toDay = cell ? cell.dataset.day : col ? col.dataset.col : '';
+    if (!toDay) return;
+    let newTime = '';
+    if (col) { const wk = app.querySelector('.wk'), lo = +wk.dataset.lo, H = +wk.dataset.h; const top = e.clientY - d.dy - col.getBoundingClientRect().top; const mins = Math.max(0, Math.min(24 * 60 - 15, Math.round((lo + top / H * 60) / 15) * 15)); newTime = `${pad2(Math.floor(mins / 60))}:${pad2(mins % 60)}`; }
+    if (d.eid) { // 活動（管理者）：移到另一天；重複活動會整個系列一起移
+      const ev = (eventCache || []).find((x) => x.id === d.eid);
+      const delta = ev ? dayDiff(d.from, toDay) : 0;
+      if (!ev || !delta) return;
+      if (ev.repeat && !confirm(`「${ev.title}」是重複活動，要把整個系列往${delta > 0 ? '後' : '前'}移 ${Math.abs(delta)} 天嗎？`)) return draw();
+      const upd = { start: addDays(ev.start, delta), end: ev.end ? addDays(ev.end, delta) : '', repeatUntil: ev.repeatUntil ? addDays(ev.repeatUntil, delta) : (ev.repeatUntil || ''), updatedAt: Date.now() };
+      try {
+        await fb.setDoc(fb.doc(db, COL.events, ev.id), upd, { merge: true });
+        Object.assign(ev, upd);
+        toast(`已把「${ev.title}」移到 ${dateLabel(upd.start)}`);
+      } catch (err) { toast('移動失敗：' + (err.code || err.message)); }
+      return draw();
+    }
+    if (d.sid != null) { // 單元課程：改日期（週曆也改時間）
+      const k = +d.sid, it = mySessions[k];
+      if (!it) return;
+      const v = { ...it, date: toDay, time: newTime || it.time };
+      if (v.date === it.date && v.time === it.time) return;
+      try { await saveSessions(mySessions.map((x, i) => (i === k ? v : x))); toast(`已改到 ${sessionText(v)}`); }
+      catch (err) { toast('儲存失敗：' + (err.code || err.message)); }
+      return draw();
+    }
+    if (d.extra != null) { // 貼上的額外一次：直接改日期和時間
+      const sc0 = mySchedules[d.cid], i = +d.extra, x = sc0 && (sc0.extras || [])[i];
+      if (!x) return;
+      const v = { date: toDay, time: newTime || x.time };
+      if (v.date === x.date && v.time === x.time) return;
+      mySchedules[d.cid] = { ...sc0, extras: sc0.extras.map((y, j) => (j === i ? v : y)) };
+      try { await saveSchedules(); toast(`已改到 ${dateLabel(v.date)} ${v.time}`); } catch (err) { mySchedules[d.cid] = sc0; toast('儲存失敗：' + (err.code || err.message)); }
+      return draw();
+    }
+    // 系列課程：只移動這一次（其他週不變）
+    const sc = mySchedules[d.cid], c = findCourse(d.cid);
+    if (!sc || !c || !d.orig) return;
+    const cur = (sc.moves || {})[d.orig] || { date: d.orig, time: sc.time };
+    const next = { date: toDay, time: newTime || cur.time || sc.time };
+    if (next.date === cur.date && next.time === (cur.time || sc.time)) return;
+    const prev = sc;
+    const moves = { ...(sc.moves || {}) };
+    if (next.date === d.orig && next.time === sc.time) delete moves[d.orig]; else moves[d.orig] = next; // 拖回原位就取消調整
+    // 順便清掉已經不在課表上的舊調整
+    Object.keys(moves).forEach((o) => { if (!isSeriesDay(sc, o)) delete moves[o]; });
+    mySchedules[d.cid] = { ...sc, moves };
+    try {
+      await saveSchedules();
+      toast(moves[d.orig] ? `這一次改到 ${dateLabel(next.date)} ${next.time}（其他週不變）` : '已改回原本的時間');
+    } catch (err) {
+      mySchedules[d.cid] = prev;
+      toast('儲存失敗：' + (err.code || err.message));
+    }
+    draw();
+  };
+  app.addEventListener('pointerup', endDrag);
+  app.addEventListener('pointercancel', (e) => { if (drag && drag.ghost) drag.ghost.remove(); if (drag) drag.chip.classList.remove('drag-src'); drag = null; app.querySelectorAll('.drop-on').forEach((x) => x.classList.remove('drop-on')); });
+
+  return {
+    // 回傳 true 表示已處理
+    async click(e) {
+      if (justDragged) return true;
+      const del = e.target.closest('.ev-del');
+      if (del) { e.preventDefault(); e.stopPropagation(); await deleteOne(del.closest('.drag-ev')); return true; }
+      const chip = e.target.closest('.drag-ev');
+      if (chip) {
+        e.preventDefault();
+        if (chip.dataset.eid) { go((isAdmin() ? '/admin/event/' : '/event/') + chip.dataset.eid); return true; }
+        if (chip.dataset.sid != null) { const it = mySessions[+chip.dataset.sid], r = it && sessionRef(it); if (r && await editSession(r.c, r.l, +chip.dataset.sid)) draw(); return true; }
+        if (chip.dataset.extra != null) { if (await editExtra(chip.dataset.cid, +chip.dataset.extra)) draw(); return true; }
+        const c = findCourse(chip.dataset.cid); if (c && await editSchedule(c)) draw(); return true;
+      }
+      if (e.target.id === 'clip-cancel') { setPlanClip(null); draw(); return true; }
+      // 貼上：點月曆的日期，或週曆欄位的某個時間
+      if (planClip) {
+        const pc = e.target.closest('[data-day].cal-cell'), pcol = e.target.closest('[data-col]');
+        if (pc || pcol) { await pasteClip(pc ? pc.dataset.day : pcol.dataset.col, pcol ? timeAt(pcol, e.clientY) : ''); return true; }
+      }
+      return false;
+    }
+  };
+}
+// 日曆上課程／活動的標籤屬性（給 bindCalOps 用）
+const calChipAttrs = (o, day) => (o.session ? `data-sid="${o.k}"` : o.study ? `data-cid="${esc(o.id)}" data-orig="${o.orig}"` + (o.extra != null ? ` data-extra="${o.extra}"` : '') : `data-eid="${esc(o.id)}"`) + ` data-day="${day}"`;
+const clipBar = (hint) => (planClip ? `<div class="clip-bar">📋 已複製「${esc(planClip.label)}」：${hint}就能貼上（可以貼很多次）<button type="button" class="btn btn-ghost btn-sm" id="clip-cancel">取消</button></div>` : '');
+
 /* ---------------- 我的課表：系列課程 + 單元課程 + 課表行事曆（只有自己看得到） ----------------
  * 資料在 islam_prefs/{Email}.schedules（在課程按「⏰ 加入我的課表」設定） */
 // #/plan：我的課表（系列課程、單元課程，只顯示自己課表的行事曆）
@@ -2358,7 +2630,7 @@ pages.plan = async (app, ym) => {
   const hasSeries = () => Object.keys(mySchedules).some((id) => hasJoined(id) && findCourse(id));
   const hasUnits = () => mySessions.some((it) => sessionRef(it));
   const allOcc = (from, to) => [...studyOccurrences(from, to), ...sessionOccurrences(from, to)];
-  const chipAttrs = (o, day) => (o.session ? `data-sid="${o.k}"` : `data-cid="${esc(o.id)}" data-orig="${o.orig}"` + (o.extra != null ? ` data-extra="${o.extra}"` : '')) + ` data-day="${day}"`;
+  const chipAttrs = calChipAttrs;
   const toMin = (t) => { const [h, mm] = t.split(':').map(Number); return h * 60 + mm; };
   function monthHtml() {
     const first = new Date(y, m - 1, 1), days = new Date(y, m, 0).getDate();
@@ -2420,7 +2692,7 @@ pages.plan = async (app, ym) => {
       `<h2>${title}</h2><button type="button" class="btn btn-ghost btn-sm" data-nav="1" aria-label="下一頁">›</button>` +
       '<button type="button" class="btn btn-ghost btn-sm" data-nav="0">今天</button>' +
       `<span class="view-switch cal-filters" role="group" aria-label="檢視"><button type="button" data-view="week" aria-pressed="${view === 'week'}">週</button><button type="button" data-view="month" aria-pressed="${view === 'month'}">月</button></span></div>` +
-      (planClip ? `<div class="clip-bar">📋 已複製「${esc(planClip.label)}」：${view === 'week' ? '點週曆上的日期和時間' : '點月曆上的日期'}就能貼上（可以貼很多次）<button type="button" class="btn btn-ghost btn-sm" id="clip-cancel">取消</button></div>` : '') +
+      clipBar(view === 'week' ? '點週曆上的日期和時間' : '點月曆上的日期') +
       (hasSeries() || hasUnits() ? '' : '<p class="notice small">還沒有課表。整門課：到「我的學習區」或課程頁按「⏰ 加入我的課表」設定每週時間；單一堂課：在上課頁按「📖 加入我的課表」。</p>') +
       (view === 'week' ? weekHtml() : monthHtml()) +
       '<h3 class="plan-h">⏰ 系列課程 <span class="muted small">整門課每週固定上課</span></h3>' + (list.length
@@ -2434,218 +2706,12 @@ pages.plan = async (app, ym) => {
       (hasSeries() || hasUnits() ? '<p class="small"><button type="button" class="link small" id="week-ics">⬇ 下載日曆檔（Apple／Outlook）</button></p>' : '') +
       '</div>';
   }
-  // 日曆上的 ✕：只刪除這一次
-  async function deleteOne(chip) {
-    if (!chip) return;
-    const day = chip.dataset.day;
-    try {
-      if (chip.dataset.sid != null) {
-        const k = +chip.dataset.sid, it = mySessions[k], r = it && sessionRef(it);
-        if (!it || !confirm(`刪除 ${dateLabel(it.date)} ${it.time}「${r ? r.l.title : ''}」？`)) return;
-        await saveSessions(mySessions.filter((_, i) => i !== k));
-      } else {
-        const cid = chip.dataset.cid, sc = mySchedules[cid], c = findCourse(cid);
-        if (!sc || !c || !confirm(`刪除 ${dateLabel(day)}「${c.title}」這一次？（其他週不變）`)) return;
-        const prev = sc;
-        if (chip.dataset.extra != null) {
-          mySchedules[cid] = { ...sc, extras: (sc.extras || []).filter((_, i) => i !== +chip.dataset.extra) };
-        } else {
-          const orig = chip.dataset.orig || day;
-          const moves = { ...(sc.moves || {}) };
-          delete moves[orig];
-          mySchedules[cid] = { ...sc, moves, skips: [...new Set([...(sc.skips || []), orig])].sort().slice(-300) };
-        }
-        try { await saveSchedules(); } catch (err) { mySchedules[cid] = prev; throw err; }
-      }
-      toast('已刪除這一次');
-    } catch (err) { toast('刪除失敗：' + (err.code || err.message)); }
-    draw();
-  }
-
-  // 週曆欄位上某個位置的時間（每 15 分鐘）
-  const timeAt = (col, clientY) => {
-    const wk = app.querySelector('.wk'), lo = +wk.dataset.lo, H = +wk.dataset.h;
-    const mins = Math.max(0, Math.min(24 * 60 - 15, Math.floor((lo + (clientY - col.getBoundingClientRect().top) / H * 60) / 15) * 15));
-    return `${pad2(Math.floor(mins / 60))}:${pad2(mins % 60)}`;
-  };
-  async function pasteClip(day, time) {
-    const clip = planClip;
-    if (!clip) return;
-    const t = time || clip.time;
-    try {
-      if (clip.kind === 'series') {
-        const sc = mySchedules[clip.cid];
-        if (!sc) { setPlanClip(null); return draw(); }
-        mySchedules[clip.cid] = { ...sc, extras: [...(sc.extras || []), { date: day, time: t }].slice(-200) };
-        await saveSchedules();
-      } else {
-        if (mySessions.length >= 500) return toast('單元課程最多 500 堂');
-        await saveSessions([...mySessions, { c: clip.c, l: clip.l, date: day, time: t, minutes: clip.minutes }]);
-      }
-      toast(`已貼上到 ${dateLabel(day)} ${t}`);
-    } catch (err) { toast('貼上失敗：' + (err.code || err.message)); }
-    draw();
-  }
-  // 貼上的額外一次：修改日期時間或刪除
-  function editExtra(cid, i) {
-    const sc = mySchedules[cid], c = findCourse(cid), x = sc && (sc.extras || [])[i];
-    if (!x || !c) return Promise.resolve(false);
-    return new Promise((resolve) => {
-      const box = document.createElement('div');
-      box.className = 'modal-backdrop';
-      box.innerHTML = '<form class="modal card pad" role="dialog" aria-modal="true">' +
-        '<button type="button" class="modal-x" data-act="x" aria-label="關閉">✕</button>' +
-        `<h3>⏰ ${esc(c.title)}（額外一次）</h3><p class="muted small">這是複製貼上的額外一堂，不影響每週的系列課程。</p>` +
-        `<div class="two"><label>日期<input class="input" type="date" name="date" value="${esc(x.date)}" required/></label>` +
-        `<label>時間<input class="input" type="time" name="time" value="${esc(x.time)}" required/></label></div>` +
-        `<div class="lesson-nav"><button class="btn btn-sm">儲存</button><a class="btn btn-ghost btn-sm" href="#/learn/${esc(cid)}" data-act="go">▶ 去上課</a>` +
-        '<button type="button" class="btn btn-ghost btn-sm" data-act="copy">📋 複製</button><button type="button" class="btn btn-ghost btn-sm" data-act="del">刪除這一次</button></div></form>';
-      const close = (v) => { box.remove(); resolve(v); };
-      const put = async (extras, msg) => {
-        const prev = mySchedules[cid];
-        mySchedules[cid] = { ...prev, extras };
-        try { await saveSchedules(); toast(msg); close(true); } catch (err) { mySchedules[cid] = prev; toast('儲存失敗：' + (err.code || err.message)); }
-      };
-      box.onclick = (e) => {
-        const act = e.target === box ? 'x' : e.target.dataset.act;
-        if (act === 'x') return close(false);
-        if (act === 'go') { e.preventDefault(); close(false); return go('/learn/' + cid); }
-        if (act === 'copy') { setPlanClip({ kind: 'series', cid, time: x.time, label: `${c.title} ${x.time}` }); return close(true); }
-        if (act === 'del') put(sc.extras.filter((_, j) => j !== i), '已刪除這一次');
-      };
-      box.onsubmit = (e) => { e.preventDefault(); const f = e.target; put(sc.extras.map((y, j) => (j === i ? { date: f.date.value, time: f.time.value } : y)), '已更新'); };
-      document.body.appendChild(box);
-    });
-  }
-  // 鍵盤：滑鼠停在課程上按 Ctrl/⌘+C 複製；停在日期上按 Ctrl/⌘+V 貼上；Esc 取消
-  let hoverChip = null, hoverDay = null, hoverY = 0;
-  app.addEventListener('pointerover', (e) => { hoverChip = e.target.closest('.drag-ev'); hoverDay = e.target.closest('[data-day].cal-cell, [data-col]'); });
-  app.addEventListener('pointermove', (e) => { hoverY = e.clientY; });
-  const onKey = async (e) => {
-    if (!app.isConnected) return document.removeEventListener('keydown', onKey);
-    if (document.querySelector('.modal-backdrop') || /input|textarea|select/i.test((document.activeElement || {}).tagName || '')) return;
-    const mod = e.ctrlKey || e.metaKey;
-    if (mod && e.key.toLowerCase() === 'c' && hoverChip) {
-      e.preventDefault();
-      if (hoverChip.dataset.sid != null) { const it = mySessions[+hoverChip.dataset.sid], r = it && sessionRef(it); if (r) setPlanClip({ kind: 'unit', c: it.c, l: it.l, time: it.time, minutes: it.minutes || 30, label: `${r.l.title} ${it.time}` }); }
-      else { const c = findCourse(hoverChip.dataset.cid), sc = mySchedules[hoverChip.dataset.cid]; if (c && sc) setPlanClip({ kind: 'series', cid: c.id, time: (hoverChip.textContent.match(/\d\d:\d\d/) || [sc.time])[0], label: `${c.title} ${sc.time}` }); }
-      draw();
-    } else if (mod && e.key.toLowerCase() === 'v' && planClip && hoverDay) {
-      e.preventDefault();
-      await pasteClip(hoverDay.dataset.day || hoverDay.dataset.col, hoverDay.dataset.col ? timeAt(hoverDay, hoverY) : '');
-    } else if (e.key === 'Escape' && planClip) { setPlanClip(null); draw(); }
-  };
-  document.addEventListener('keydown', onKey);
-  const onClip = () => { if (app.isConnected) draw(); else document.removeEventListener('planclip', onClip); };
-  document.addEventListener('planclip', onClip);
-
-  // 點課程：修改；拖曳課程：月曆改成另一個星期幾，週曆還可以上下調整時間（每 15 分鐘）
-  const weekdayOf = (day) => new Date(...(([a, b, c]) => [a, b - 1, c])(parseDay(day))).getDay();
-  let drag = null, justDragged = false;
-  app.addEventListener('pointerdown', (e) => {
-    const chip = e.target.closest('.drag-ev');
-    if (!chip || e.button > 0 || e.target.closest('.ev-del')) return;
-    const r = chip.getBoundingClientRect();
-    drag = { chip, cid: chip.dataset.cid, sid: chip.dataset.sid, extra: chip.dataset.extra, orig: chip.dataset.orig, from: chip.dataset.day, x: e.clientX, y: e.clientY, dy: e.clientY - r.top, moved: false, ghost: null };
-  });
-  app.addEventListener('pointermove', (e) => {
-    if (!drag) return;
-    if (!drag.moved && Math.hypot(e.clientX - drag.x, e.clientY - drag.y) < 6) return;
-    e.preventDefault();
-    if (!drag.moved) {
-      drag.moved = true;
-      const r = drag.chip.getBoundingClientRect();
-      drag.ghost = drag.chip.cloneNode(true);
-      Object.assign(drag.ghost.style, { position: 'fixed', left: r.left + 'px', top: r.top + 'px', width: r.width + 'px', height: r.height + 'px', zIndex: 80, pointerEvents: 'none', opacity: '.85', boxShadow: '0 8px 20px rgba(0,0,0,.2)' });
-      document.body.appendChild(drag.ghost);
-      drag.chip.classList.add('drag-src');
-      drag.ox = e.clientX - r.left;
-    }
-    drag.ghost.style.left = (e.clientX - drag.ox) + 'px';
-    drag.ghost.style.top = (e.clientY - drag.dy) + 'px';
-    app.querySelectorAll('.drop-on').forEach((x) => x.classList.remove('drop-on'));
-    const over = document.elementFromPoint(e.clientX, e.clientY);
-    const tgt = over && (over.closest('[data-day].cal-cell') || over.closest('[data-col]'));
-    if (tgt) tgt.classList.add('drop-on');
-  });
-  const endDrag = async (e) => {
-    if (!drag) return;
-    const d = drag;
-    drag = null;
-    app.querySelectorAll('.drop-on').forEach((x) => x.classList.remove('drop-on'));
-    if (!d.moved) return; // 只是點一下：交給 click 處理（修改）
-    justDragged = true;
-    setTimeout(() => { justDragged = false; }, 50);
-    d.ghost.remove();
-    d.chip.classList.remove('drag-src');
-    const over = document.elementFromPoint(e.clientX, e.clientY);
-    const cell = over && over.closest('[data-day].cal-cell');
-    const col = over && over.closest('[data-col]');
-    const toDay = cell ? cell.dataset.day : col ? col.dataset.col : '';
-    if (!toDay) return;
-    let newTime = '';
-    if (col) { const wk = app.querySelector('.wk'), lo = +wk.dataset.lo, H = +wk.dataset.h; const top = e.clientY - d.dy - col.getBoundingClientRect().top; const mins = Math.max(0, Math.min(24 * 60 - 15, Math.round((lo + top / H * 60) / 15) * 15)); newTime = `${pad2(Math.floor(mins / 60))}:${pad2(mins % 60)}`; }
-    if (d.sid != null) { // 單元課程：改日期（週曆也改時間）
-      const k = +d.sid, it = mySessions[k];
-      if (!it) return;
-      const v = { ...it, date: toDay, time: newTime || it.time };
-      if (v.date === it.date && v.time === it.time) return;
-      try { await saveSessions(mySessions.map((x, i) => (i === k ? v : x))); toast(`已改到 ${sessionText(v)}`); }
-      catch (err) { toast('儲存失敗：' + (err.code || err.message)); }
-      return draw();
-    }
-    if (d.extra != null) { // 貼上的額外一次：直接改日期和時間
-      const sc0 = mySchedules[d.cid], i = +d.extra, x = sc0 && (sc0.extras || [])[i];
-      if (!x) return;
-      const v = { date: toDay, time: newTime || x.time };
-      if (v.date === x.date && v.time === x.time) return;
-      mySchedules[d.cid] = { ...sc0, extras: sc0.extras.map((y, j) => (j === i ? v : y)) };
-      try { await saveSchedules(); toast(`已改到 ${dateLabel(v.date)} ${v.time}`); } catch (err) { mySchedules[d.cid] = sc0; toast('儲存失敗：' + (err.code || err.message)); }
-      return draw();
-    }
-    // 系列課程：只移動這一次（其他週不變）
-    const sc = mySchedules[d.cid], c = findCourse(d.cid);
-    if (!sc || !c || !d.orig) return;
-    const cur = (sc.moves || {})[d.orig] || { date: d.orig, time: sc.time };
-    const next = { date: toDay, time: newTime || cur.time || sc.time };
-    if (next.date === cur.date && next.time === (cur.time || sc.time)) return;
-    const prev = sc;
-    const moves = { ...(sc.moves || {}) };
-    if (next.date === d.orig && next.time === sc.time) delete moves[d.orig]; else moves[d.orig] = next; // 拖回原位就取消調整
-    // 順便清掉已經不在課表上的舊調整
-    Object.keys(moves).forEach((o) => { if (!isSeriesDay(sc, o)) delete moves[o]; });
-    mySchedules[d.cid] = { ...sc, moves };
-    try {
-      await saveSchedules();
-      toast(moves[d.orig] ? `這一次改到 ${dateLabel(next.date)} ${next.time}（其他週不變）` : '已改回原本的時間');
-    } catch (err) {
-      mySchedules[d.cid] = prev;
-      toast('儲存失敗：' + (err.code || err.message));
-    }
-    draw();
-  };
-  app.addEventListener('pointerup', endDrag);
-  app.addEventListener('pointercancel', (e) => { if (drag && drag.ghost) drag.ghost.remove(); if (drag) drag.chip.classList.remove('drag-src'); drag = null; app.querySelectorAll('.drop-on').forEach((x) => x.classList.remove('drop-on')); });
+  const ops = bindCalOps(app, () => draw());
 
   app.onclick = async (e) => {
-    if (justDragged) return;
-    const del = e.target.closest('.ev-del');
-    if (del) { e.preventDefault(); e.stopPropagation(); return deleteOne(del.closest('.drag-ev')); }
-    const chip = e.target.closest('.drag-ev');
-    if (chip) {
-      e.preventDefault();
-      if (chip.dataset.sid != null) { const it = mySessions[+chip.dataset.sid], r = it && sessionRef(it); if (r && await editSession(r.c, r.l, +chip.dataset.sid)) draw(); return; }
-      if (chip.dataset.extra != null) { if (await editExtra(chip.dataset.cid, +chip.dataset.extra)) draw(); return; }
-      const c = findCourse(chip.dataset.cid); if (c && await editSchedule(c)) draw(); return;
-    }
+    if (await ops.click(e)) return;
     const sb = e.target.closest('[data-sess]');
     if (sb) { const it = mySessions[+sb.dataset.sess], r = it && sessionRef(it); if (r && await editSession(r.c, r.l, +sb.dataset.sess)) draw(); return; }
-    if (e.target.id === 'clip-cancel') { setPlanClip(null); return draw(); }
-    // 貼上：點月曆的日期，或週曆欄位的某個時間
-    if (planClip) {
-      const pc = e.target.closest('[data-day].cal-cell'), pcol = e.target.closest('[data-col]');
-      if (pc || pcol) { await pasteClip(pc ? pc.dataset.day : pcol.dataset.col, pcol ? timeAt(pcol, e.clientY) : ''); return; }
-    }
     const v = e.target.closest('[data-view]');
     if (v) { view = v.dataset.view; try { localStorage.setItem('isl_plan_view', view); } catch (err) {} picked = ''; return draw(); }
     const nav = e.target.closest('[data-nav]');
