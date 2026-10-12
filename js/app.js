@@ -7,7 +7,7 @@
  * 安全規則在 1.01academy repo 的 firestore.rules。
  */
 // 這個網站的 Firestore 集合名稱
-const COL = { courses: 'islam_courses', videos: 'islam_courseVideos', enroll: 'islam_enroll', prefs: 'islam_prefs', students: 'islam_students', notes: 'islam_notes', posts: 'islam_posts', counts: 'islam_counts', counted: 'islam_counted', stats: 'islam_stats', articles: 'islam_articles', blog: 'islam_blog', media: 'islam_media', events: 'islam_events' };
+const COL = { courses: 'islam_courses', videos: 'islam_courseVideos', enroll: 'islam_enroll', prefs: 'islam_prefs', students: 'islam_students', notes: 'islam_notes', posts: 'islam_posts', counts: 'islam_counts', counted: 'islam_counted', stats: 'islam_stats', articles: 'islam_articles', blog: 'islam_blog', media: 'islam_media', events: 'islam_events', plans: 'islam_plans' };
 const FIREBASE = 'https://www.gstatic.com/firebasejs/10.12.2/';
 const CONFIG = window.SITE_CONFIG || {};
 const configured = !!(CONFIG.firebaseConfig && CONFIG.firebaseConfig.apiKey);
@@ -32,6 +32,12 @@ const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (ch) => ({ '&'
 const clock = (s) => !s ? '' : Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
 const lessonTime = (l) => l.kind === 'article' ? (l.duration ? Math.round(l.duration / 60) + ' 分鐘閱讀' : '文章') : clock(l.duration);
 const lessonsOf = (c) => c.chapters.flatMap((ch) => ch.lessons);
+// 學習者自己選的單元顯示順序：遞增（第一課在前，預設）或遞減（最後一課在前），記在這台電腦
+const isDesc = (cid) => { try { return (JSON.parse(localStorage.getItem('isl_lesson_order')) || {})[cid] === 'desc'; } catch (e) { return false; } };
+const setDesc = (cid, desc) => { try { const m = JSON.parse(localStorage.getItem('isl_lesson_order')) || {}; if (desc) m[cid] = 'desc'; else delete m[cid]; localStorage.setItem('isl_lesson_order', JSON.stringify(m)); } catch (e) {} };
+const orderedChapters = (c, desc = isDesc(c.id)) => (desc ? [...c.chapters].reverse().map((ch) => ({ ...ch, lessons: [...ch.lessons].reverse() })) : c.chapters);
+const orderSwitch = (desc) => '<span class="order-switch" role="group" aria-label="單元順序">' +
+  `<button type="button" data-order="asc" aria-pressed="${!desc}" title="第一課在前">↑ 遞增</button><button type="button" data-order="desc" aria-pressed="${desc}" title="最後一課在前">↓ 遞減</button></span>`;
 const totalMinutes = (c) => Math.round(lessonsOf(c).reduce((s, l) => s + l.duration, 0) / 60);
 const minutesText = (c) => (totalMinutes(c) ? ` · ${totalMinutes(c)} 分鐘` : '');
 const findCourse = (id) => courses.find((c) => c.id === id);
@@ -1331,7 +1337,7 @@ pages.course = (app, id) => {
     (c.trailer ? '<h2>課程預告</h2>' + youtubeEmbed(c.trailer) : '') +
     `<h2>課程介紹</h2><div class="article course-intro">${renderArticle(c.description)}</div>` +
     ((c.outcomes || []).length ? `<h2>你將學到</h2><ul class="checks">${c.outcomes.map((o) => `<li>${esc(o)}</li>`).join('')}</ul>` : '') +
-    '<h2>課程內容</h2>' + c.chapters.map((ch) =>
+    `<div class="row-between lessons-head"><h2>課程內容</h2>${orderSwitch(isDesc(c.id))}</div>` + orderedChapters(c).map((ch) =>
       `<div class="card chapter"><strong>${esc(ch.title)}</strong>` +
       ch.lessons.map((l) => `<div class="lesson"><span>${mine ? (l.kind === 'article' ? ICON.fileText : '▶') : '🔒'} ${esc(l.title)}</span><span class="muted small">${lessonTime(l)}</span></div>`).join('') +
       '</div>').join('') +
@@ -1340,6 +1346,7 @@ pages.course = (app, id) => {
     `<aside class="card buy">${thumb(c)}<div class="pad">${box}${countText(c) ? `<p class="muted small center">${countText(c)}</p>` : ''}</div></aside></div>`;
   const joinBtn = app.querySelector('#join');
   if (joinBtn) joinBtn.onclick = () => joinCourse(c, joinBtn);
+  app.querySelectorAll('[data-order]').forEach((b) => { b.onclick = () => { setDesc(c.id, b.dataset.order === 'desc'); pages.course(app, id); }; });
   const sb = app.querySelector('[data-schedule]');
   if (sb) sb.onclick = async () => { if (await editSchedule(c)) render(); };
   renderPosts(app.querySelector('#posts'), c);
@@ -1701,6 +1708,7 @@ pages.my = (app) => {
         Object.entries(MY_VIEWS).map(([k, v]) => `<button type="button" data-view="${k}" aria-pressed="${k === view}" title="${v[1]}">${v[0]} ${v[1]}</button>`).join('') + '</div></div>' +
         '<p class="muted small" id="myhint">按住 ⠿ 拖曳可調整順序、移進或移出資料夾；也可以按 ↑ ↓，或在課程的「📁」選擇資料夾。會自動儲存。</p>' +
         '<p class="muted" id="mynone" hidden>找不到符合的課程。</p>' +
+        '<section class="my-plans" id="my-plans"></section>' +
         (Object.keys(mySchedules).some((id) => has(id))
           ? '<p class="small study-bar">📅 你設定的學習時間會顯示在 <a class="link" href="#/calendar">行事曆</a>（只有你看得到） · <button type="button" class="link small" id="study-ics">⬇ 全部加入手機／電腦日曆</button></p>' : '') +
         `<div id="area" class="view-${view}">` + folders.map(folderBox).join('') +
@@ -1708,8 +1716,9 @@ pages.my = (app) => {
         `<div class="path my-list" data-list="">${unfiled.map((c) => card(c, '')).join('')}</div></div>`
       : '<div class="card pad"><p>你的學習區還沒有課程。</p>' +
         '<p class="muted small">在學習地圖的課程卡片按「＋ 加入學習區」，或到課程頁按「加入課程」。建議從第 1 階段開始。</p>' +
-        '<a href="#/" class="btn btn-sm">查看學習地圖</a></div>') + '</div>';
+        '<a href="#/" class="btn btn-sm">查看學習地圖</a></div>' + '<section class="my-plans" id="my-plans"></section>') + '</div>';
 
+  renderPlans(app.querySelector('#my-plans'), () => pages.my(app));
   const area = app.querySelector('#area');
   const sics = app.querySelector('#study-ics');
   if (sics) sics.onclick = () => downloadStudyIcs();
@@ -1794,10 +1803,20 @@ pages.my = (app) => {
     }
     if (sec && e.target.closest('[data-delfolder]')) {
       const f = folders.find((x) => x.id === sec.dataset.fid);
-      if (!confirm(`刪除資料夾「${f.name}」？裡面的課程會移回「未分類」，不會移出學習區。`)) return;
       const cur = snapshot();
-      const moved = (cur.folders.find((x) => x.id === f.id) || {}).courses || [];
-      saveFolders(cur.folders.filter((x) => x.id !== f.id), [...cur.order, ...moved]);
+      const inside = ((cur.folders.find((x) => x.id === f.id) || {}).courses || []).map(findCourse).filter(Boolean);
+      // 資料夾裡的課程一起移出學習區（學習進度、筆記保留，之後可以再加入）
+      if (!confirm(inside.length
+        ? `刪除資料夾「${f.name}」？\n\n裡面的 ${inside.length} 門課也會一起移出學習區：\n${inside.map((c) => '・' + c.title).join('\n')}\n\n學習進度和筆記會保留，之後可以再加入。`
+        : `刪除資料夾「${f.name}」？`)) return;
+      try {
+        for (const c of inside) { await leaveCourse(c); delete mySchedules[c.id]; }
+        saveFolders(cur.folders.filter((x) => x.id !== f.id), cur.order);
+        toast(inside.length ? `已刪除資料夾，並移出 ${inside.length} 門課` : '已刪除資料夾');
+      } catch (err) {
+        toast('刪除失敗：' + (err.code || err.message));
+        pages.my(app);
+      }
       return;
     }
     const cardEl = e.target.closest('.my-card');
@@ -2024,7 +2043,8 @@ pages.learn = async (app, id, query, lessonId) => {
   }
   if (!document.body.contains(app)) return; // 載入期間已換頁
 
-  const all = lessonsOf(c);
+  const desc = isDesc(c.id);
+  const all = orderedChapters(c, desc).flatMap((ch) => ch.lessons); // 依學習者選的順序（上一／下一單元也照這個順序）
   const done = doneList(c.id);
   const cur = all.find((l) => l.id === lessonId) || all.find((l) => !done.includes(l.id)) || all[0];
   const i = all.indexOf(cur);
@@ -2045,6 +2065,7 @@ pages.learn = async (app, id, query, lessonId) => {
     '<div class="lesson-nav">' +
     (i > 0 ? `<a class="btn btn-ghost btn-sm" href="#/learn/${c.id}/${all[i - 1].id}">← 上一單元</a>` : '') +
     `<button class="btn btn-sm ${isDone ? 'btn-ghost' : ''}" id="done">${isDone ? '✓ 已完成' : '標記完成'}</button>` +
+    '<button class="btn btn-ghost btn-sm" id="to-plan" title="把這個單元加到自己的課表">＋ 加入課表</button>' +
     (i < all.length - 1 ? `<a class="btn btn-ghost btn-sm" href="#/learn/${c.id}/${all[i + 1].id}">下一單元 →</a>` : '') +
     '</div></div>' +
     (onlyArticle ? '' : youtubeEmbed(videos[cur.id])) +
@@ -2062,7 +2083,8 @@ pages.learn = async (app, id, query, lessonId) => {
     `<aside class="side"><div class="pad"><strong>${esc(c.title)}</strong><div class="bar"><i style="width:${progress(c)}%"></i></div>` +
     `<span class="muted small">進度 ${progress(c)}%</span>` +
     (progress(c) === 100 && nextCourse(c) ? `<a class="btn btn-sm btn-block next-step" href="#/course/${nextCourse(c).id}">下一階段：${esc(nextCourse(c).title)} →</a>` : '') + '</div>' +
-    c.chapters.map((ch) => `<div class="side-ch">${esc(ch.title)}</div>` + ch.lessons.map((l) => {
+    `<div class="pad side-order"><span class="muted small">單元順序</span>${orderSwitch(desc)}</div>` +
+    orderedChapters(c, desc).map((ch) => `<div class="side-ch">${esc(ch.title)}</div>` + ch.lessons.map((l) => {
       const d = done.includes(l.id);
       return `<a class="side-l${l === cur ? ' active' : ''}" href="#/learn/${c.id}/${l.id}">` +
         `<span class="dot${d ? ' done' : ''}">${d ? '✓' : ''}</span>${esc(l.title)}` +
@@ -2079,6 +2101,8 @@ pages.learn = async (app, id, query, lessonId) => {
   bindExportMenu(app.querySelector('#note-export'), (fmt) => exportNotes([c], `notes-${safeName(c.id)}`, fmt));
   renderPosts(app.querySelector('#posts'), c);
 
+  app.querySelector('#to-plan').onclick = () => addToPlan(c, cur);
+  app.querySelectorAll('[data-order]').forEach((b) => { b.onclick = () => { setDesc(c.id, b.dataset.order === 'desc'); pages.learn(app, id, query, cur.id); }; });
   app.querySelector('#done').onclick = () => {
     setDone(c.id, cur.id, !isDone);
     if (!isDone && progress(c) === 100) toast(nextCourse(c) ? '🎉 恭喜完成這個階段！可以繼續下一階段了' : '🎉 恭喜完成整門課程！');
@@ -2086,6 +2110,216 @@ pages.learn = async (app, id, query, lessonId) => {
     else pages.learn(app, id, query, cur.id);
   };
 };
+
+/* ---------------- 我的課表：學生自己挑各課程的單元，排成自己的課表 ----------------
+ * islam_plans/{Email} = { plans: [{ id, name, items: [{ c: 課程id, l: 單元id }] }], updatedAt } */
+let plansCache = null, plansFor = '';
+async function loadPlans(force = false) {
+  if (!isVerified()) return [];
+  const email = user.email.toLowerCase();
+  if (!force && plansCache && plansFor === email) return plansCache;
+  try {
+    const snap = await fb.getDoc(fb.doc(db, COL.plans, email));
+    plansCache = snap.exists() ? (snap.data().plans || []) : [];
+  } catch (e) { console.error(e); plansCache = plansCache || []; }
+  plansFor = email;
+  return plansCache;
+}
+async function savePlans(plans) {
+  await fb.setDoc(fb.doc(db, COL.plans, user.email.toLowerCase()), { plans, updatedAt: Date.now() });
+  plansCache = plans;
+}
+const lessonRef = (it) => { const c = findCourse(it.c); const l = c && lessonsOf(c).find((x) => x.id === it.l); return c && l ? { c, l } : null; };
+const planMinutes = (p) => Math.round(p.items.reduce((n, it) => n + ((lessonRef(it) || {}).l?.duration || 0), 0) / 60);
+// 「加入課表」：選一個課表（或新增），把單元加進去
+async function addToPlan(c, l) {
+  const plans = await loadPlans();
+  const box = document.createElement('div');
+  box.className = 'modal-backdrop';
+  box.innerHTML = '<div class="modal card pad" role="dialog" aria-modal="true" aria-labelledby="pp-title">' +
+    `<h3 id="pp-title">＋ 加入課表</h3><p class="muted small">把「${esc(l.title)}」（${esc(c.title)}）加到哪個課表？</p>` +
+    '<div class="folder-picks">' + plans.map((p) => {
+      const has = p.items.some((it) => it.c === c.id && it.l === l.id);
+      return `<button type="button" class="folder-pick" data-pid="${esc(p.id)}" ${has ? 'disabled' : ''}>📋 ${esc(p.name)}<span class="muted small">${has ? '✓ 已在課表裡' : p.items.length + ' 個單元'}</span></button>`;
+    }).join('') + '</div>' +
+    '<form class="folder-new" id="pp-new"><input class="input" name="name" maxlength="40" placeholder="新課表名稱，例如：每日晨讀"/><button class="btn btn-sm">＋ 新增並加入</button></form>' +
+    '<p class="muted small">到「我的學習區」的「📋 我的課表」可以排順序、從頭播放。</p></div>';
+  const close = () => { box.remove(); document.removeEventListener('keydown', onKey); };
+  const onKey = (e) => { if (e.key === 'Escape') close(); };
+  const put = async (plan, isNew) => {
+    const next = isNew ? [...plans, plan] : plans.map((p) => (p.id === plan.id ? plan : p));
+    try { await savePlans(next); toast(`已加入課表「${plan.name}」`); close(); }
+    catch (err) { toast('儲存失敗：' + (err.code || err.message) + '（請確認已部署最新的 Firestore 規則）'); }
+  };
+  box.onclick = (e) => {
+    if (e.target === box) return close();
+    const b = e.target.closest('[data-pid]');
+    if (!b || b.disabled) return;
+    const p = plans.find((x) => x.id === b.dataset.pid);
+    if (p.items.length >= 500) return toast('一個課表最多 500 個單元');
+    put({ ...p, items: [...p.items, { c: c.id, l: l.id }] }, false);
+  };
+  box.onsubmit = (e) => {
+    e.preventDefault();
+    const name = e.target.name.value.trim().slice(0, 40);
+    if (!name) return toast('請輸入課表名稱');
+    if (plans.length >= 30) return toast('課表最多 30 個');
+    put({ id: newId('p'), name, items: [{ c: c.id, l: l.id }] }, true);
+  };
+  document.addEventListener('keydown', onKey);
+  document.body.appendChild(box);
+}
+
+// 「我的學習區」裡的課表區塊
+async function renderPlans(box, refresh) {
+  if (!box) return;
+  const plans = await loadPlans(true);
+  if (!document.body.contains(box)) return;
+  box.innerHTML = '<div class="row-between"><h2>📋 我的課表</h2><button type="button" class="btn btn-ghost btn-sm" id="plan-new">＋ 新增課表</button></div>' +
+    '<p class="muted small">從不同課程挑選單元，排成自己的課表（例如「每日晨讀」「禮拜重點複習」）。在上課頁按「＋ 加入課表」就能把單元加進來。</p>' +
+    (plans.length ? '<div class="plan-grid">' + plans.map((p) => {
+      const done = p.items.filter((it) => doneList(it.c).includes(it.l)).length;
+      const pct = p.items.length ? Math.round(done / p.items.length * 100) : 0;
+      return `<div class="card pad plan-card"><h3>📋 ${esc(p.name)}</h3>` +
+        `<p class="muted small">${p.items.length} 個單元${planMinutes(p) ? ` · 約 ${planMinutes(p)} 分鐘` : ''}</p>` +
+        `<div class="bar"><i style="width:${pct}%"></i></div><p class="small owned">${pct === 100 ? '✓ 已全部完成' : `進度 ${pct}%`}</p>` +
+        '<div class="lesson-nav">' + (p.items.length ? `<a class="btn btn-sm" href="#/plan/${esc(p.id)}/play">▶ ${done && pct < 100 ? '繼續播放' : '開始播放'}</a>` : '') +
+        `<a class="btn btn-ghost btn-sm" href="#/plan/${esc(p.id)}">編輯</a></div></div>`;
+    }).join('') + '</div>' : '');
+  box.querySelector('#plan-new').onclick = async () => {
+    const name = (prompt('課表名稱（例如：每日晨讀）') || '').trim().slice(0, 40);
+    if (!name) return;
+    if (plans.length >= 30) return toast('課表最多 30 個');
+    try { await savePlans([...plans, { id: newId('p'), name, items: [] }]); refresh(); }
+    catch (err) { toast('儲存失敗：' + (err.code || err.message) + '（請確認已部署最新的 Firestore 規則）'); }
+  };
+}
+// 舊網址：課表已移到「我的學習區」
+pages.plans = () => go('/my');
+
+pages.plan = async (app, id, query, sub) => {
+  if (!user) return go('/login?next=/plan/' + id);
+  if (!isVerified()) return pages.verify(app);
+  app.innerHTML = '<div class="container"><p class="muted">載入中…</p></div>';
+  const plans = await loadPlans();
+  if (!document.body.contains(app)) return;
+  const plan = plans.find((p) => p.id === id);
+  if (!plan) return notFound(app);
+  if (sub != null) return planPlayer(app, plan, sub);
+  const save = async (next) => {
+    try { await savePlans(plans.map((p) => (p.id === plan.id ? next : p))); }
+    catch (err) { toast('儲存失敗：' + (err.code || err.message)); }
+    pages.plan(app, id);
+  };
+  app.innerHTML = '<div class="container editor"><a href="#/my" class="muted small">← 我的學習區</a>' +
+    `<div class="row-between"><h1>📋 ${esc(plan.name)}</h1><span class="lesson-nav">` +
+    (plan.items.length ? `<a class="btn btn-sm" href="#/plan/${esc(plan.id)}/play">▶ 播放</a>` : '') +
+    '<button type="button" class="btn btn-ghost btn-sm" id="plan-rename">重新命名</button><button type="button" class="btn btn-ghost btn-sm" id="plan-del">刪除課表</button></span></div>' +
+    (plan.items.length ? '<p class="muted small">按住 ⠿ 拖曳可以調整順序，會自動儲存；也可以按 ↑ ↓。</p>' : '<p class="muted">課表還是空的。到任何一個上課頁按「＋ 加入課表」，就能把單元加進來。</p>') +
+    '<div class="plan-items" id="plan-items">' + plan.items.map((it, k) => {
+      const r = lessonRef(it);
+      const d = r && doneList(r.c.id).includes(r.l.id);
+      return `<div class="card plan-item" data-k="${k}"><span class="drag-handle" title="拖曳調整順序">⠿</span><span class="plan-no">${k + 1}</span>` +
+        (r ? `<a class="plan-title" href="#/plan/${esc(plan.id)}/${k}"><strong>${d ? '✓ ' : ''}${esc(r.l.title)}</strong><span class="muted small">${esc(r.c.title)}${lessonTime(r.l) ? ' · ' + esc(lessonTime(r.l)) : ''}</span></a>`
+          : '<span class="plan-title muted">（這個單元已被刪除）</span>') +
+        '<span class="plan-acts">' + (k > 0 ? `<button type="button" class="icon-btn" data-mv="-1" aria-label="往上">↑</button>` : '') +
+        (k < plan.items.length - 1 ? `<button type="button" class="icon-btn" data-mv="1" aria-label="往下">↓</button>` : '') +
+        '<button type="button" class="icon-btn" data-rm aria-label="從課表移除">✕</button></span></div>';
+    }).join('') + '</div></div>';
+  app.querySelector('#plan-rename').onclick = () => {
+    const name = (prompt('課表名稱', plan.name) || '').trim().slice(0, 40);
+    if (name && name !== plan.name) save({ ...plan, name });
+  };
+  app.querySelector('#plan-del').onclick = async () => {
+    if (!confirm(`刪除課表「${plan.name}」？（不影響課程和學習進度）`)) return;
+    try { await savePlans(plans.filter((p) => p.id !== plan.id)); go('/my'); }
+    catch (err) { toast('刪除失敗：' + (err.code || err.message)); }
+  };
+  const list = app.querySelector('#plan-items');
+  list.onclick = (e) => {
+    const row = e.target.closest('.plan-item');
+    if (!row) return;
+    const k = +row.dataset.k, items = [...plan.items];
+    if (e.target.closest('[data-rm]')) { items.splice(k, 1); return save({ ...plan, items }); }
+    const mv = e.target.closest('[data-mv]');
+    if (mv) { const j = k + +mv.dataset.mv; [items[k], items[j]] = [items[j], items[k]]; save({ ...plan, items }); }
+  };
+  // 拖曳排序
+  let dragging = null, start = '';
+  list.addEventListener('pointerdown', (e) => {
+    const h = e.target.closest('.drag-handle');
+    if (!h) return;
+    e.preventDefault();
+    dragging = h.closest('.plan-item');
+    start = [...list.children].map((x) => x.dataset.k).join();
+    dragging.classList.add('dragging');
+    h.setPointerCapture(e.pointerId);
+  });
+  list.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    const over = document.elementFromPoint(e.clientX, e.clientY);
+    const target = over && over.closest('.plan-item');
+    if (!target || target === dragging || !list.contains(target)) {
+      if (e.clientY < 70) scrollBy(0, -12); else if (e.clientY > innerHeight - 50) scrollBy(0, 12);
+      return;
+    }
+    const r = target.getBoundingClientRect();
+    if (e.clientY > r.top + r.height / 2) target.after(dragging); else target.before(dragging);
+    [...list.children].forEach((row, k) => { row.querySelector('.plan-no').textContent = k + 1; });
+  });
+  const end = () => {
+    if (!dragging) return;
+    dragging.classList.remove('dragging');
+    dragging = null;
+    const order = [...list.children].map((x) => +x.dataset.k);
+    if (order.join() !== start) save({ ...plan, items: order.map((k) => plan.items[k]) });
+  };
+  list.addEventListener('pointerup', end);
+  list.addEventListener('pointercancel', end);
+};
+
+// 依課表順序播放
+async function planPlayer(app, plan, sub) {
+  const items = plan.items;
+  if (!items.length) return go('/plan/' + plan.id);
+  let i = sub === 'play' ? Math.max(0, items.findIndex((it) => !doneList(it.c).includes(it.l))) : Math.min(items.length - 1, Math.max(0, +sub || 0));
+  const it = items[i], r = lessonRef(it);
+  const link = (k) => `#/plan/${plan.id}/${k}`;
+  const nav = '<div class="lesson-nav">' +
+    (i > 0 ? `<a class="btn btn-ghost btn-sm" href="${link(i - 1)}">← 上一個</a>` : '') +
+    (r ? `<button class="btn btn-sm ${doneList(r.c.id).includes(r.l.id) ? 'btn-ghost' : ''}" id="done">${doneList(r.c.id).includes(r.l.id) ? '✓ 已完成' : '標記完成'}</button>` : '') +
+    (i < items.length - 1 ? `<a class="btn btn-ghost btn-sm" href="${link(i + 1)}">下一個 →</a>` : '') + '</div>';
+  let body = '';
+  if (!r) body = '<div class="pad"><p class="muted">這個單元已被刪除，請跳到下一個。</p></div>';
+  else if (!owns(r.c.id)) body = `<div class="pad"><p>這個單元屬於「${esc(r.c.title)}」，要先加入這門課程才能觀看（免費）。</p><a class="btn btn-sm" href="#/course/${r.c.id}">前往課程頁</a></div>`;
+  else {
+    app.innerHTML = '<div class="container"><p class="muted">載入中…</p></div>';
+    let videos = {}, article = null;
+    try { [videos, article] = await Promise.all([loadVideos(r.c.id), loadArticle(r.c.id, r.l.id)]); } catch (e) { console.error(e); }
+    if (!document.body.contains(app)) return;
+    body = (videos[r.l.id] || !article ? youtubeEmbed(videos[r.l.id]) : '') +
+      (article ? `<div class="pad lesson-article">${articleHtml(article)}</div>` : '') +
+      (r.l.note ? `<div class="pad lesson-note"><h3>單元說明</h3><div>${linkify(esc(r.l.note)).replace(/\n/g, '<br>')}</div></div>` : '');
+  }
+  app.innerHTML = '<div class="player">' +
+    `<div><div class="pad lesson-head"><div><p class="muted small">📋 ${esc(plan.name)} · 第 ${i + 1} / ${items.length} 個</p>` +
+    `<h2>${r ? esc(r.l.title) : '（已刪除的單元）'}</h2>` + (r ? `<p class="muted small">出自：<a class="link" href="#/learn/${r.c.id}/${r.l.id}">${esc(r.c.title)}</a></p>` : '') + '</div>' +
+    nav + '</div>' + body + '</div>' +
+    `<aside class="side"><div class="pad"><strong>📋 ${esc(plan.name)}</strong><p class="muted small"><a class="link" href="#/plan/${esc(plan.id)}">編輯課表</a></p></div>` +
+    items.map((x, k) => {
+      const rr = lessonRef(x), d = rr && doneList(rr.c.id).includes(rr.l.id);
+      return `<a class="side-l${k === i ? ' active' : ''}" href="${link(k)}"><span class="dot${d ? ' done' : ''}">${d ? '✓' : ''}</span>` +
+        `<span>${rr ? esc(rr.l.title) : '（已刪除）'}<br><span class="muted small">${rr ? esc(rr.c.title) : ''}</span></span><span class="muted small">${rr ? esc(lessonTime(rr.l)) : ''}</span></a>`;
+    }).join('') + '</aside></div>';
+  if (sub === 'play') history.replaceState(null, '', link(i));
+  const doneBtn = app.querySelector('#done');
+  if (doneBtn) doneBtn.onclick = () => {
+    const was = doneList(r.c.id).includes(r.l.id);
+    setDone(r.c.id, r.l.id, !was);
+    if (!was && i < items.length - 1) go('/plan/' + plan.id + '/' + (i + 1));
+    else { if (!was) toast('🎉 課表全部完成！'); planPlayer(app, plan, String(i)); }
+  };
+}
 
 /* ---------------- 管理者：編輯課程 ---------------- */
 // 毫秒 ↔ <input type="datetime-local"> 的本地時間字串
