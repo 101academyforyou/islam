@@ -253,3 +253,9 @@ table.orders th { font-size: 12px; color: var(--muted); background: var(--soft);
 .drag-handle { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 8px; background: var(--card); border: 1px solid var(--border); cursor: grab; font-size: 18px; user-select: none; touch-action: none; }
 .my-card.dragging { opacity: .6; outline: 2px dashed var(--primary); outline-offset: 2px; }
 .my-card.dragging .drag-handle { cursor: grabbing; }
+/* 卡片橫向排列時用 ← →；手機單欄直向排列時用 ↑ ↓ */
+.my-tools .arr-v { display: none; }
+@media (max-width: 600px) {
+  .my-tools .arr-h { display: none; }
+  .my-tools .arr-v { display: inline; }
+}

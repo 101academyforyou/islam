@@ -446,13 +446,13 @@ pages.my = (app) => {
   app.innerHTML = '<div class="container"><div class="row-between"><h1>我的學習區</h1>' +
     '<a class="btn btn-ghost btn-sm" href="#/">＋ 加入更多課程</a></div>' +
     (list.length
-      ? '<p class="muted small">按住 ⠿ 拖曳卡片，或用 ↑ ↓ 調整順序，排成你想要的學習順序；順序會自動儲存。</p>' +
+      ? '<p class="muted small">按住 ⠿ 拖曳卡片，或按箭頭往前、往後移動，排成你想要的學習順序；順序會自動儲存。</p>' +
         '<div class="grid my-grid" id="mine">' + list.map((c) => {
           const p = progress(c), n = c.unlisted ? 0 : stepOf(c);
           return `<div class="card course my-card" data-id="${esc(c.id)}">` +
             `<div class="my-tools"><span class="drag-handle" title="拖曳調整順序" aria-label="拖曳調整順序">⠿</span>` +
-            '<button type="button" class="icon-btn" data-move="-1" aria-label="往前">↑</button>' +
-            '<button type="button" class="icon-btn" data-move="1" aria-label="往後">↓</button>' +
+            '<button type="button" class="icon-btn" data-move="-1" aria-label="往前移" title="往前移"><span class="arr-h">←</span><span class="arr-v">↑</span></button>' +
+            '<button type="button" class="icon-btn" data-move="1" aria-label="往後移" title="往後移"><span class="arr-h">→</span><span class="arr-v">↓</span></button>' +
             '<button type="button" class="icon-btn" data-leave aria-label="移出學習區" title="移出學習區">✕</button></div>' +
             `<a href="#/learn/${c.id}" draggable="false">${thumb(c)}</a><div class="pad">` +
             (n ? `<span class="tag">第 ${n} 階段</span>` : '') + `<h3><a href="#/learn/${c.id}" draggable="false">${esc(c.title)}</a></h3>` +
@@ -469,7 +469,7 @@ pages.my = (app) => {
     const ids = [...grid.children].map((el) => el.dataset.id);
     saving = saving.then(() => saveOrder(ids)).catch((err) => toast('順序儲存失敗：' + (err.code || err.message)));
   };
-  // ↑ ↓、移出
+  // 往前／往後移、移出
   grid.onclick = async (e) => {
     const card = e.target.closest('.my-card');
     if (!card) return;
