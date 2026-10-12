@@ -309,15 +309,27 @@ const ICON = {
 };
 const countText = (c) => joinCount[c.id] > 0 ? `<span class="learners">${ICON.usersRound} ${joinCount[c.id].toLocaleString()} 人加入學習</span>` : '';
 
-// 文章單元的內容（讀不到或沒有時回傳空字串）
+// 外部文章連結：https 的網頁嵌入顯示（有些網站不允許嵌入，所以一定附上「開啟原文」按鈕）
+function articleLink(url) {
+  let host = '';
+  try { host = new URL(url).hostname.replace(/^www\./, ''); } catch (e) { return ''; }
+  const embed = /^https:\/\//i.test(url);
+  return '<div class="article-link">' +
+    (embed ? `<iframe src="${esc(url)}" title="文章" loading="lazy" referrerpolicy="no-referrer" sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-forms"></iframe>` : '') +
+    `<div class="article-link-bar"><span class="muted small">${ICON.fileText} 文章來源：${esc(host)}${embed ? '（如果上方沒有顯示內容，代表該網站不允許嵌入，請按右邊的按鈕閱讀）' : ''}</span>` +
+    `<a class="btn btn-sm" href="${esc(url)}" target="_blank" rel="noopener noreferrer">在新分頁開啟原文 ↗</a></div></div>`;
+}
+const articleHtml = (a) => !a ? '' : (a.url ? articleLink(a.url) : '') + (a.text ? `<div class="article">${renderArticle(a.text)}</div>` : '');
+
+// 文章單元的內容 { text, url }（讀不到或沒有時回傳 null）
 const articleCache = {};
 async function loadArticle(courseId, lessonId) {
   const key = courseId + '/' + lessonId;
   if (key in articleCache) return articleCache[key];
   try {
     const snap = await fb.getDoc(fb.doc(db, COL.articles, courseId, 'lessons', lessonId));
-    articleCache[key] = snap.exists() ? (snap.data().text || '') : '';
-  } catch (e) { console.error(e); return ''; }
+    articleCache[key] = snap.exists() ? { text: snap.data().text || '', url: snap.data().url || '' } : null;
+  } catch (e) { console.error(e); return null; }
   return articleCache[key];
 }
 
@@ -1041,11 +1053,11 @@ pages.learn = async (app, id, query, lessonId) => {
   const cur = all.find((l) => l.id === lessonId) || all.find((l) => !done.includes(l.id)) || all[0];
   const i = all.indexOf(cur);
   const isDone = done.includes(cur.id);
-  let article = '';
+  let article = null;
   if (cur.kind === 'article' || !videos[cur.id]) article = await loadArticle(c.id, cur.id);
-  else loadArticle(c.id, cur.id).then((t) => { // 影片單元也可能附文章
+  else loadArticle(c.id, cur.id).then((a) => { // 影片單元也可能附文章
     const box = app.querySelector('#article');
-    if (t && box) { box.innerHTML = renderArticle(t); box.hidden = false; }
+    if (a && box) { box.innerHTML = articleHtml(a); box.hidden = false; }
   });
   if (!document.body.contains(app)) return;
   const onlyArticle = !videos[cur.id] && article;
@@ -1060,7 +1072,7 @@ pages.learn = async (app, id, query, lessonId) => {
     (i < all.length - 1 ? `<a class="btn btn-ghost btn-sm" href="#/learn/${c.id}/${all[i + 1].id}">下一單元 →</a>` : '') +
     '</div></div>' +
     (onlyArticle ? '' : youtubeEmbed(videos[cur.id])) +
-    `<div class="pad article" id="article" ${article ? '' : 'hidden'}>${article ? renderArticle(article) : ''}</div>` +
+    `<div class="pad lesson-article" id="article" ${article ? '' : 'hidden'}>${articleHtml(article)}</div>` +
     '<div class="pad share-warning">🔗 本課程為公開課程，<strong>歡迎分享</strong>給親友一起學習。</div>' +
     // 單元說明（在 data.js 每個單元的第 4 個欄位填寫）
     (cur.note ? `<div class="pad lesson-note"><h3>單元說明</h3><div>${linkify(esc(cur.note)).replace(/\n/g, '<br>')}</div></div>` : '') +
@@ -1356,15 +1368,22 @@ pages.edit = async (app, id) => {
   } : JSON.parse(JSON.stringify(src));
   c.thumb = c.thumb || ['#0ea5e9', '#7dd3fc', '伊斯蘭'];
   let videos = {};
-  const articles = {}; // 單元 id → 文章內容（islam_articles/{課程id}/lessons/{單元id}）
+  const articles = {}; // 單元 id → 文章內容（islam_articles/{課程id}/lessons/{單元id}.text）
+  const links = {};    // 單元 id → 外部文章連結（同一份文件的 url）
   if (!isNew) {
     try { videos = { ...(await fb.getDoc(fb.doc(db, COL.videos, c.id))).data() }; } catch (e) { console.error(e); }
     try {
       const snap = await fb.getDocs(fb.collection(db, COL.articles, c.id, 'lessons'));
-      snap.docs.forEach((d) => { articles[d.id] = d.data().text || ''; });
+      snap.docs.forEach((d) => {
+        if (d.data().text) articles[d.id] = d.data().text;
+        if (d.data().url) links[d.id] = d.data().url;
+      });
     } catch (e) { console.error(e); }
   }
-  const savedArticles = { ...articles }; // 資料庫裡目前的文章，只寫入有修改的單元
+  // 資料庫裡目前的文章，只寫入有修改的單元
+  const artKey = (id) => JSON.stringify([articles[id] || '', links[id] || '']);
+  const savedArticles = {};
+  new Set([...Object.keys(articles), ...Object.keys(links)]).forEach((id) => { savedArticles[id] = artKey(id); });
   if (!document.body.contains(app)) return;
 
   const field = (label, name, val, attrs = '') => `<label>${label}<input class="input" name="${name}" value="${esc(val)}" ${attrs}/></label>`;
@@ -1410,6 +1429,7 @@ pages.edit = async (app, id) => {
           `<button type="button" class="btn btn-ghost btn-sm" data-act="del-l" data-ci="${ci}" data-li="${li}">刪除</button></span></div>` +
           `<label>單元標題<input class="input" data-l="title" data-ci="${ci}" data-li="${li}" value="${esc(l.title)}"/></label>` +
           `<label>影片 <span class="muted small">貼上 YouTube 影片網址；純文章單元請留空</span><input class="input" data-l="video" data-ci="${ci}" data-li="${li}" value="${esc(videos[l.id] || '')}" placeholder="https://youtu.be/…"/></label>` +
+          `<label>文章連結 <span class="muted small">可留空。貼上外部文章網址，學生會在單元裡直接看到這篇文章</span><input class="input" data-l="link" data-ci="${ci}" data-li="${li}" value="${esc(links[l.id] || '')}" placeholder="https://…"/></label>` +
           `<label>文章內容 <span class="muted small">可留空。支援 # 標題、**粗體**、- 清單、&gt; 引用、[文字](網址)、![說明](圖片網址)</span>` +
           `<textarea class="input textarea article-input" rows="${articles[l.id] ? 10 : 3}" data-l="article" data-ci="${ci}" data-li="${li}" placeholder="在這裡寫文章內容…">${esc(articles[l.id] || '')}</textarea></label>` +
           `<details class="article-preview" data-preview="${l.id}" ${articles[l.id] ? '' : 'hidden'}><summary class="small">預覽文章</summary><div class="article">${renderArticle(articles[l.id] || '')}</div></details>` +
@@ -1445,6 +1465,7 @@ pages.edit = async (app, id) => {
     f.querySelectorAll('[data-l]').forEach((el) => {
       const l = c.chapters[+el.dataset.ci].lessons[+el.dataset.li];
       if (el.dataset.l === 'video') { if (el.value.trim()) videos[l.id] = el.value.trim(); else delete videos[l.id]; }
+      else if (el.dataset.l === 'link') { if (el.value.trim()) links[l.id] = el.value.trim(); else delete links[l.id]; }
       else if (el.dataset.l === 'article') { if (el.value.trim()) articles[l.id] = el.value.replace(/\s+$/, ''); else delete articles[l.id]; }
       else l[el.dataset.l] = el.dataset.l === 'note' ? el.value.trim() : el.value.trim();
     });
@@ -1531,21 +1552,23 @@ pages.edit = async (app, id) => {
     const problem = !c.title ? '請輸入課程名稱，才會自動儲存'
       : !lessonsOf(c).length ? '至少需要一個單元'
       : lessonsOf(c).some((l) => !l.title) ? '請填寫所有單元的標題，才會自動儲存'
-      : (() => { const bad = lessonsOf(c).find((l) => videos[l.id] && !youtubeId(videos[l.id])); return bad ? `「${bad.title}」的影片網址格式不正確` : ''; })();
+      : (() => { const bad = lessonsOf(c).find((l) => videos[l.id] && !youtubeId(videos[l.id])); return bad ? `「${bad.title}」的影片網址格式不正確` : ''; })()
+      || (() => { const bad = lessonsOf(c).find((l) => links[l.id] && !/^https?:\/\/\S+$/i.test(links[l.id])); return bad ? `「${bad.title}」的文章連結要以 https:// 開頭` : ''; })();
     if (problem) { setStatus('⚠ ' + problem, true); return Promise.resolve(false); }
     // 只保留還存在的單元的影片
     const ids = lessonsOf(c).map((l) => l.id);
     Object.keys(videos).forEach((k) => { if (!ids.includes(k)) delete videos[k]; });
     Object.keys(articles).forEach((k) => { if (!ids.includes(k)) delete articles[k]; });
+    Object.keys(links).forEach((k) => { if (!ids.includes(k)) delete links[k]; });
     // 課程頁要知道哪些是文章單元（顯示圖示）；純文章單元依字數估計閱讀時間（每分鐘約 400 字）
     lessonsOf(c).forEach((l) => {
       const art = articles[l.id];
-      if (art && !videos[l.id]) { l.kind = 'article'; l.duration = Math.max(1, Math.round(art.length / 400)) * 60; }
+      if ((art || links[l.id]) && !videos[l.id]) { l.kind = 'article'; l.duration = art ? Math.max(1, Math.round(art.length / 400)) * 60 : 0; }
       else { if (l.kind === 'article') l.duration = 0; delete l.kind; }
     });
-    const artChanges = [...new Set([...Object.keys(articles), ...Object.keys(savedArticles)])]
-      .filter((k) => (articles[k] || '') !== (savedArticles[k] || ''))
-      .map((k) => [k, articles[k] || '']);
+    const artChanges = [...new Set([...Object.keys(articles), ...Object.keys(links), ...Object.keys(savedArticles)])]
+      .filter((k) => artKey(k) !== (savedArticles[k] || JSON.stringify(['', ''])))
+      .map((k) => [k, articles[k] || '', links[k] || '']);
     const data = { ...JSON.parse(JSON.stringify(c)), updatedAt: Date.now() };
     delete data.id;
     const vids = { ...videos };
@@ -1554,10 +1577,10 @@ pages.edit = async (app, id) => {
       await fb.setDoc(fb.doc(db, COL.courses, c.id), data);
       await fb.setDoc(fb.doc(db, COL.videos, c.id), vids);
       videoCache[c.id] = vids;
-      for (const [lid, text] of artChanges) {
+      for (const [lid, text, url] of artChanges) {
         const ref = fb.doc(db, COL.articles, c.id, 'lessons', lid);
-        if (text) await fb.setDoc(ref, { text, updatedAt: Date.now() }); else await fb.deleteDoc(ref);
-        if (text) savedArticles[lid] = text; else delete savedArticles[lid];
+        if (text || url) await fb.setDoc(ref, { text, url, updatedAt: Date.now() }); else await fb.deleteDoc(ref);
+        if (text || url) savedArticles[lid] = JSON.stringify([text, url]); else delete savedArticles[lid];
         delete articleCache[c.id + '/' + lid];
       }
       const i = courses.findIndex((x) => x.id === c.id);
