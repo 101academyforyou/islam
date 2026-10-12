@@ -7,7 +7,7 @@
  * 安全規則在 1.01academy repo 的 firestore.rules。
  */
 // 這個網站的 Firestore 集合名稱
-const COL = { courses: 'islam_courses', videos: 'islam_courseVideos', enroll: 'islam_enroll', prefs: 'islam_prefs', students: 'islam_students', notes: 'islam_notes', posts: 'islam_posts', counts: 'islam_counts', counted: 'islam_counted', stats: 'islam_stats' };
+const COL = { courses: 'islam_courses', videos: 'islam_courseVideos', enroll: 'islam_enroll', prefs: 'islam_prefs', students: 'islam_students', notes: 'islam_notes', posts: 'islam_posts', counts: 'islam_counts', counted: 'islam_counted', stats: 'islam_stats', articles: 'islam_articles' };
 const FIREBASE = 'https://www.gstatic.com/firebasejs/10.12.2/';
 const CONFIG = window.SITE_CONFIG || {};
 const configured = !!(CONFIG.firebaseConfig && CONFIG.firebaseConfig.apiKey);
@@ -29,6 +29,7 @@ let joinCount = {};      // 課程 id → 加入學習的累計人數（islam_co
 /* ---------------- 小工具 ---------------- */
 const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
 const clock = (s) => !s ? '' : Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+const lessonTime = (l) => l.kind === 'article' ? (l.duration ? Math.round(l.duration / 60) + ' 分鐘閱讀' : '文章') : clock(l.duration);
 const lessonsOf = (c) => c.chapters.flatMap((ch) => ch.lessons);
 const totalMinutes = (c) => Math.round(lessonsOf(c).reduce((s, l) => s + l.duration, 0) / 60);
 const minutesText = (c) => (totalMinutes(c) ? ` · ${totalMinutes(c)} 分鐘` : '');
@@ -79,6 +80,44 @@ function youtubeEmbed(v) {
   return id
     ? `<div class="video"><iframe src="https://www.youtube-nocookie.com/embed/${id}?rel=0&modestbranding=1" title="課程影片" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen" allowfullscreen></iframe></div>`
     : '<div class="video empty"><p>此單元影片尚未設定</p></div>';
+}
+
+// 文章單元：簡易格式（# 標題、**粗體**、*斜體*、- 清單、1. 編號、> 引用、--- 分隔線、[文字](網址)、![說明](圖片網址)、網址自動連結）
+// 先跳脫所有 HTML，再轉換格式，所以內容不會被插入程式碼；每段 dir="auto"，阿拉伯文會自動由右到左
+function renderArticle(text) {
+  const inline = (t) => {
+    const keep = [];
+    const hold = (html) => `\u0000${keep.push(html) - 1}\u0000`;
+    t = t.replace(/!\[([^\]]*)\]\((https?:\/\/[^\s)]+)\)/g, (_, alt, u) => hold(`<img src="${u}" alt="${alt}" loading="lazy"/>`))
+      .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (_, label, u) => hold(`<a class="link" href="${u}" target="_blank" rel="noopener">${label}</a>`))
+      .replace(/https?:\/\/[^\s<]+/g, (u) => hold(`<a class="link" href="${u}" target="_blank" rel="noopener">${u}</a>`))
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/(^|[^*])\*([^*\s][^*]*?)\*/g, '$1<em>$2</em>');
+    return t.replace(/\u0000(\d+)\u0000/g, (_, i) => keep[+i]);
+  };
+  const out = [];
+  let list = null, para = [];
+  const flushPara = () => { if (para.length) out.push(`<p dir="auto">${para.map(inline).join('<br>')}</p>`); para = []; };
+  const flushList = () => { if (list) out.push(`<${list.tag} dir="auto">${list.items.map((x) => `<li>${inline(x)}</li>`).join('')}</${list.tag}>`); list = null; };
+  esc(text || '').replace(/\r/g, '').split('\n').forEach((raw) => {
+    const line = raw.trimEnd();
+    let m;
+    if (!line.trim()) { flushPara(); flushList(); return; }
+    if ((m = line.match(/^(#{1,3})\s+(.*)$/))) { flushPara(); flushList(); const h = m[1].length + 2; out.push(`<h${h} dir="auto">${inline(m[2])}</h${h}>`); return; }
+    if (/^-{3,}$/.test(line.trim())) { flushPara(); flushList(); out.push('<hr/>'); return; }
+    if ((m = line.match(/^&gt;\s?(.*)$/))) { flushPara(); flushList(); out.push(`<blockquote dir="auto">${inline(m[1])}</blockquote>`); return; }
+    if ((m = line.match(/^\s*[-*]\s+(.*)$/)) || (m = line.match(/^\s*\d+[.)]\s+(.*)$/))) {
+      const tag = /^\s*\d/.test(line) ? 'ol' : 'ul';
+      flushPara();
+      if (!list || list.tag !== tag) { flushList(); list = { tag, items: [] }; }
+      list.items.push(m[1]);
+      return;
+    }
+    flushList();
+    para.push(line);
+  });
+  flushPara(); flushList();
+  return out.join('');
 }
 
 const isVerified = () => !!(user && user.emailVerified);
@@ -265,9 +304,22 @@ async function loadCounts() {
 const lucide = (paths) => `<svg class="icon" viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
 const ICON = {
   usersRound: lucide('<path d="M18 21a8 8 0 0 0-16 0"/><circle cx="10" cy="8" r="5"/><path d="M22 20c0-3.37-2-6.5-4-8a5 5 0 0 0-.45-8.3"/>'),
+  fileText: lucide('<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/>'),
   bookOpen: lucide('<path d="M12 7v14"/><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/>')
 };
 const countText = (c) => joinCount[c.id] > 0 ? `<span class="learners">${ICON.usersRound} ${joinCount[c.id].toLocaleString()} 人加入學習</span>` : '';
+
+// 文章單元的內容（讀不到或沒有時回傳空字串）
+const articleCache = {};
+async function loadArticle(courseId, lessonId) {
+  const key = courseId + '/' + lessonId;
+  if (key in articleCache) return articleCache[key];
+  try {
+    const snap = await fb.getDoc(fb.doc(db, COL.articles, courseId, 'lessons', lessonId));
+    articleCache[key] = snap.exists() ? (snap.data().text || '') : '';
+  } catch (e) { console.error(e); return ''; }
+  return articleCache[key];
+}
 
 async function loadVideos(courseId) {
   if (videoCache[courseId]) return videoCache[courseId];
@@ -424,7 +476,7 @@ pages.course = (app, id) => {
     ((c.outcomes || []).length ? `<h2>你將學到</h2><ul class="checks">${c.outcomes.map((o) => `<li>${esc(o)}</li>`).join('')}</ul>` : '') +
     '<h2>課程內容</h2>' + c.chapters.map((ch) =>
       `<div class="card chapter"><strong>${esc(ch.title)}</strong>` +
-      ch.lessons.map((l) => `<div class="lesson"><span>${mine ? '▶' : '🔒'} ${esc(l.title)}</span><span class="muted small">${clock(l.duration)}</span></div>`).join('') +
+      ch.lessons.map((l) => `<div class="lesson"><span>${mine ? (l.kind === 'article' ? ICON.fileText : '▶') : '🔒'} ${esc(l.title)}</span><span class="muted small">${lessonTime(l)}</span></div>`).join('') +
       '</div>').join('') +
     '<h2 id="talk">💬 心得分享與交流</h2><div class="talk" id="posts"></div>' +
     '</div>' +
@@ -989,6 +1041,14 @@ pages.learn = async (app, id, query, lessonId) => {
   const cur = all.find((l) => l.id === lessonId) || all.find((l) => !done.includes(l.id)) || all[0];
   const i = all.indexOf(cur);
   const isDone = done.includes(cur.id);
+  let article = '';
+  if (cur.kind === 'article' || !videos[cur.id]) article = await loadArticle(c.id, cur.id);
+  else loadArticle(c.id, cur.id).then((t) => { // 影片單元也可能附文章
+    const box = app.querySelector('#article');
+    if (t && box) { box.innerHTML = renderArticle(t); box.hidden = false; }
+  });
+  if (!document.body.contains(app)) return;
+  const onlyArticle = !videos[cur.id] && article;
 
   app.innerHTML = '<div class="player">' +
     '<div>' +
@@ -999,7 +1059,8 @@ pages.learn = async (app, id, query, lessonId) => {
     `<button class="btn btn-sm ${isDone ? 'btn-ghost' : ''}" id="done">${isDone ? '✓ 已完成' : '標記完成'}</button>` +
     (i < all.length - 1 ? `<a class="btn btn-ghost btn-sm" href="#/learn/${c.id}/${all[i + 1].id}">下一單元 →</a>` : '') +
     '</div></div>' +
-    youtubeEmbed(videos[cur.id]) +
+    (onlyArticle ? '' : youtubeEmbed(videos[cur.id])) +
+    `<div class="pad article" id="article" ${article ? '' : 'hidden'}>${article ? renderArticle(article) : ''}</div>` +
     '<div class="pad share-warning">🔗 本課程為公開課程，<strong>歡迎分享</strong>給親友一起學習。</div>' +
     // 單元說明（在 data.js 每個單元的第 4 個欄位填寫）
     (cur.note ? `<div class="pad lesson-note"><h3>單元說明</h3><div>${linkify(esc(cur.note)).replace(/\n/g, '<br>')}</div></div>` : '') +
@@ -1017,7 +1078,7 @@ pages.learn = async (app, id, query, lessonId) => {
       const d = done.includes(l.id);
       return `<a class="side-l${l === cur ? ' active' : ''}" href="#/learn/${c.id}/${l.id}">` +
         `<span class="dot${d ? ' done' : ''}">${d ? '✓' : ''}</span>${esc(l.title)}` +
-        ((myNotes[l.id] || {}).text ? '<span class="note-dot" title="有筆記">📝</span>' : '') + `<span class="muted small">${clock(l.duration)}</span></a>`;
+        ((myNotes[l.id] || {}).text ? '<span class="note-dot" title="有筆記">📝</span>' : '') + `<span class="muted small">${lessonTime(l)}</span></a>`;
     }).join('')).join('') + '</aside></div>';
 
   const noteEl = app.querySelector('#note'), noteState = app.querySelector('#note-state');
@@ -1295,9 +1356,15 @@ pages.edit = async (app, id) => {
   } : JSON.parse(JSON.stringify(src));
   c.thumb = c.thumb || ['#0ea5e9', '#7dd3fc', '伊斯蘭'];
   let videos = {};
+  const articles = {}; // 單元 id → 文章內容（islam_articles/{課程id}/lessons/{單元id}）
   if (!isNew) {
     try { videos = { ...(await fb.getDoc(fb.doc(db, COL.videos, c.id))).data() }; } catch (e) { console.error(e); }
+    try {
+      const snap = await fb.getDocs(fb.collection(db, COL.articles, c.id, 'lessons'));
+      snap.docs.forEach((d) => { articles[d.id] = d.data().text || ''; });
+    } catch (e) { console.error(e); }
   }
+  const savedArticles = { ...articles }; // 資料庫裡目前的文章，只寫入有修改的單元
   if (!document.body.contains(app)) return;
 
   const field = (label, name, val, attrs = '') => `<label>${label}<input class="input" name="${name}" value="${esc(val)}" ${attrs}/></label>`;
@@ -1332,7 +1399,7 @@ pages.edit = async (app, id) => {
       '</div>' +
 
       '<div class="card pad"><div class="row-between"><h3>章節與單元</h3><button type="button" class="btn btn-ghost btn-sm" data-act="add-ch">＋ 新增章節</button></div>' +
-      '<p class="muted small">單元影片網址只有加入課程的學生和管理者看得到。</p>' +
+      '<p class="muted small">每個單元可以放影片、文章，或兩者都放（文章顯示在影片下方）。影片網址和文章內容只有加入課程的學生和管理者看得到。</p>' +
       c.chapters.map((ch, ci) =>
         `<div class="ed-chapter"><div class="row-between"><input class="input" data-ch="${ci}" value="${esc(ch.title)}" placeholder="章節名稱"/>` +
         `<button type="button" class="btn btn-ghost btn-sm" data-act="del-ch" data-ci="${ci}">刪除章節</button></div>` +
@@ -1342,7 +1409,10 @@ pages.edit = async (app, id) => {
           (li < ch.lessons.length - 1 ? `<button type="button" class="btn btn-ghost btn-sm" data-act="down" data-ci="${ci}" data-li="${li}">↓</button>` : '') +
           `<button type="button" class="btn btn-ghost btn-sm" data-act="del-l" data-ci="${ci}" data-li="${li}">刪除</button></span></div>` +
           `<label>單元標題<input class="input" data-l="title" data-ci="${ci}" data-li="${li}" value="${esc(l.title)}"/></label>` +
-          `<label>影片 <span class="muted small">貼上「不公開」YouTube 影片網址</span><input class="input" data-l="video" data-ci="${ci}" data-li="${li}" value="${esc(videos[l.id] || '')}" placeholder="https://youtu.be/…"/></label>` +
+          `<label>影片 <span class="muted small">貼上 YouTube 影片網址；純文章單元請留空</span><input class="input" data-l="video" data-ci="${ci}" data-li="${li}" value="${esc(videos[l.id] || '')}" placeholder="https://youtu.be/…"/></label>` +
+          `<label>文章內容 <span class="muted small">可留空。支援 # 標題、**粗體**、- 清單、&gt; 引用、[文字](網址)、![說明](圖片網址)</span>` +
+          `<textarea class="input textarea article-input" rows="${articles[l.id] ? 10 : 3}" data-l="article" data-ci="${ci}" data-li="${li}" placeholder="在這裡寫文章內容…">${esc(articles[l.id] || '')}</textarea></label>` +
+          `<details class="article-preview" data-preview="${l.id}" ${articles[l.id] ? '' : 'hidden'}><summary class="small">預覽文章</summary><div class="article">${renderArticle(articles[l.id] || '')}</div></details>` +
           `<label>單元說明 <span class="muted small">顯示在影片下方，網址會變成連結</span><textarea class="input textarea" rows="3" data-l="note" data-ci="${ci}" data-li="${li}">${esc(l.note || '')}</textarea></label></div>`
         ).join('') +
         `<button type="button" class="btn btn-ghost btn-sm" data-act="add-l" data-ci="${ci}">＋ 新增單元</button></div>`
@@ -1375,6 +1445,7 @@ pages.edit = async (app, id) => {
     f.querySelectorAll('[data-l]').forEach((el) => {
       const l = c.chapters[+el.dataset.ci].lessons[+el.dataset.li];
       if (el.dataset.l === 'video') { if (el.value.trim()) videos[l.id] = el.value.trim(); else delete videos[l.id]; }
+      else if (el.dataset.l === 'article') { if (el.value.trim()) articles[l.id] = el.value.replace(/\s+$/, ''); else delete articles[l.id]; }
       else l[el.dataset.l] = el.dataset.l === 'note' ? el.value.trim() : el.value.trim();
     });
   }
@@ -1416,6 +1487,7 @@ pages.edit = async (app, id) => {
           await chain;
           await fb.deleteDoc(fb.doc(db, COL.courses, c.id));
           await fb.deleteDoc(fb.doc(db, COL.videos, c.id));
+          for (const lid of Object.keys(savedArticles)) await fb.deleteDoc(fb.doc(db, COL.articles, c.id, 'lessons', lid));
           courses = courses.filter((x) => x.id !== c.id);
           toast('課程已刪除');
           return go('/admin');
@@ -1425,7 +1497,15 @@ pages.edit = async (app, id) => {
       autosave(0);
     };
     // 打字停下 1 秒、勾選或換顏色後自動儲存
-    f.addEventListener('input', () => autosave(1000));
+    f.addEventListener('input', (e) => {
+      // 文章預覽跟著打字更新
+      if (e.target.dataset.l === 'article') {
+        const l = c.chapters[+e.target.dataset.ci].lessons[+e.target.dataset.li];
+        const pv = app.querySelector(`[data-preview="${l.id}"]`);
+        if (pv) { pv.hidden = !e.target.value.trim(); pv.querySelector('.article').innerHTML = renderArticle(e.target.value); }
+      }
+      autosave(1000);
+    });
     f.addEventListener('change', (e) => { if (e.target.id !== 'cover-file') autosave(300); });
 
     // 「完成，查看課程」：先存好再前往課程頁
@@ -1456,6 +1536,16 @@ pages.edit = async (app, id) => {
     // 只保留還存在的單元的影片
     const ids = lessonsOf(c).map((l) => l.id);
     Object.keys(videos).forEach((k) => { if (!ids.includes(k)) delete videos[k]; });
+    Object.keys(articles).forEach((k) => { if (!ids.includes(k)) delete articles[k]; });
+    // 課程頁要知道哪些是文章單元（顯示圖示）；純文章單元依字數估計閱讀時間（每分鐘約 400 字）
+    lessonsOf(c).forEach((l) => {
+      const art = articles[l.id];
+      if (art && !videos[l.id]) { l.kind = 'article'; l.duration = Math.max(1, Math.round(art.length / 400)) * 60; }
+      else { if (l.kind === 'article') l.duration = 0; delete l.kind; }
+    });
+    const artChanges = [...new Set([...Object.keys(articles), ...Object.keys(savedArticles)])]
+      .filter((k) => (articles[k] || '') !== (savedArticles[k] || ''))
+      .map((k) => [k, articles[k] || '']);
     const data = { ...JSON.parse(JSON.stringify(c)), updatedAt: Date.now() };
     delete data.id;
     const vids = { ...videos };
@@ -1464,6 +1554,12 @@ pages.edit = async (app, id) => {
       await fb.setDoc(fb.doc(db, COL.courses, c.id), data);
       await fb.setDoc(fb.doc(db, COL.videos, c.id), vids);
       videoCache[c.id] = vids;
+      for (const [lid, text] of artChanges) {
+        const ref = fb.doc(db, COL.articles, c.id, 'lessons', lid);
+        if (text) await fb.setDoc(ref, { text, updatedAt: Date.now() }); else await fb.deleteDoc(ref);
+        if (text) savedArticles[lid] = text; else delete savedArticles[lid];
+        delete articleCache[c.id + '/' + lid];
+      }
       const i = courses.findIndex((x) => x.id === c.id);
       if (i > -1) courses[i] = { ...c }; else courses.push({ ...c });
       if (!created) { created = true; history.replaceState(null, '', '#/admin/' + c.id); } // 新課程：網址改成這門課的編輯頁
