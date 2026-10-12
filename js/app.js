@@ -14,6 +14,7 @@ const configured = !!(CONFIG.firebaseConfig && CONFIG.firebaseConfig.apiKey);
 
 let fb = null;           // Firebase 函式
 let auth = null, db = null, fbApp = null;
+let fbAppMod = null;       // firebase-app 模組（加入 Google 日曆時用）
 let user = null;         // 目前登入的 Firebase 使用者
 let joined = [];         // 已加入的課程 id（從課程頁按「加入課程」）
 let joinedAt = {};       // 課程 id → 加入時間（毫秒）
@@ -242,6 +243,7 @@ async function initFirebase() {
     import(FIREBASE + 'firebase-firestore.js')
   ]);
   fb = { ...a, ...f };
+  fbAppMod = app;
   const firebaseApp = fbApp = app.initializeApp(CONFIG.firebaseConfig);
   auth = a.getAuth(firebaseApp);
   auth.languageCode = 'zh-TW'; // 驗證信、重設密碼信使用繁體中文
@@ -819,6 +821,91 @@ function googleCalUrl(e) {
     `&text=${encodeURIComponent(e.title)}&dates=${dates}&details=${encodeURIComponent(details)}&location=${encodeURIComponent(placeText(e) || e.url || '')}` +
     (rrule(e) ? `&recur=${encodeURIComponent(rrule(e))}` : '');
 }
+/* ---------------- 直接加入 Google 日曆（Google Calendar API） ----------------
+ * 第一次會跳出 Google 視窗請使用者同意「管理日曆活動」，之後一按就直接加到使用者自己的 Google 日曆。
+ * 用另一個 Firebase App 實例登入取得權杖，不影響網站本身的登入狀態。
+ * 若失敗（例如未啟用 Calendar API、視窗被擋），改成打開 Google 日曆的新增頁面讓使用者自己按儲存。 */
+let gcalToken = '', gcalExp = 0;
+async function googleCalToken() {
+  if (window.__gcalToken) return window.__gcalToken; // 測試用
+  if (gcalToken && Date.now() < gcalExp) return gcalToken;
+  const second = fbAppMod.getApps().find((x) => x.name === 'gcal') || fbAppMod.initializeApp(CONFIG.firebaseConfig, 'gcal');
+  const a2 = fb.getAuth(second);
+  const provider = new fb.GoogleAuthProvider();
+  provider.addScope('https://www.googleapis.com/auth/calendar.events');
+  provider.setCustomParameters(user && user.email ? { login_hint: user.email } : {});
+  const res = await fb.signInWithPopup(a2, provider);
+  const cred = fb.GoogleAuthProvider.credentialFromResult(res);
+  if (!cred || !cred.accessToken) throw new Error('沒有取得 Google 日曆權限');
+  gcalToken = cred.accessToken;
+  gcalExp = Date.now() + 50 * 60 * 1000;
+  fb.signOut(a2).catch(() => {});
+  return gcalToken;
+}
+// 自訂活動 id（同一個活動重複加入時只會更新，不會重複）：base32hex 只能用 0-9a-v，用 16 進位編碼
+const gcalId = (key) => [...new TextEncoder().encode('isl' + key)].map((x) => x.toString(16).padStart(2, '0')).join('').slice(0, 1000);
+async function gcalPut(event, retry = true) {
+  const token = await googleCalToken();
+  const api = 'https://www.googleapis.com/calendar/v3/calendars/primary/events';
+  const headers = { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' };
+  let res = await fetch(api, { method: 'POST', headers, body: JSON.stringify(event) });
+  if (res.status === 409) res = await fetch(api + '/' + encodeURIComponent(event.id), { method: 'PUT', headers, body: JSON.stringify(event) }); // 已經加過：更新
+  if (res.status === 401 && retry) { gcalToken = ''; window.__gcalToken = ''; return gcalPut(event, false); }
+  if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Error((j.error && j.error.message) || 'HTTP ' + res.status); }
+  return res.json();
+}
+// 一次加入多個；失敗時用備用網址（Google 日曆新增頁）
+async function addToGoogleCalendar(events, fallbackUrl, btn) {
+  const label = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = '加入中…'; }
+  try {
+    for (const ev of events) await gcalPut(ev);
+    toast(events.length > 1 ? `✓ 已加入 ${events.length} 個到你的 Google 日曆` : '✓ 已加入你的 Google 日曆');
+    if (btn) { btn.textContent = '✓ 已加入 Google 日曆'; btn.disabled = false; }
+    return true;
+  } catch (e) {
+    console.warn('Google 日曆直接加入失敗，改開新增頁', e);
+    if (btn) { btn.disabled = false; btn.textContent = label; }
+    if (/popup-closed|cancelled-popup/.test(e.code || '')) return false; // 使用者自己關掉視窗
+    if (fallbackUrl) { toast('無法直接加入，已打開 Google 日曆，請按「儲存」'); window.open(fallbackUrl, '_blank', 'noopener'); }
+    else toast('無法加入 Google 日曆：' + (e.message || e.code));
+    return false;
+  }
+}
+const gcalWhen = (day, time) => ({ dateTime: `${day}T${time}:00`, timeZone: 'Asia/Taipei' });
+function gcalEventOf(e) {
+  const timed = !e.allDay && e.startTime;
+  return {
+    id: gcalId('e' + e.id),
+    summary: e.title,
+    location: placeText(e) || e.url || '',
+    description: [plainText(e.description).slice(0, 4000), e.url, location.origin + location.pathname + '#/event/' + e.id].filter(Boolean).join('\n\n'),
+    start: timed ? gcalWhen(e.start, e.startTime) : { date: e.start },
+    end: timed ? gcalWhen(endOf(e), e.endTime || e.startTime) : { date: plusDay(endOf(e)) },
+    ...(rrule(e) ? { recurrence: [rrule(e)] } : {})
+  };
+}
+function gcalStudyOf(c, sc) {
+  const d = studyFirstDay(sc);
+  return {
+    id: gcalId('s' + c.id),
+    summary: '學習：' + c.title,
+    description: '繼續上課：' + location.origin + location.pathname + '#/learn/' + c.id,
+    start: gcalWhen(d, sc.time), end: gcalWhen(d, addMinutes(sc.time, sc.minutes)),
+    recurrence: [studyRule(sc)],
+    reminders: { useDefault: false, overrides: [{ method: 'popup', minutes: 10 }] }
+  };
+}
+function gcalPlanItemOf(it, r) {
+  return {
+    id: gcalId('p' + it.c + '/' + it.l),
+    summary: '學習：' + r.l.title,
+    description: `${r.c.title}\n繼續上課：${location.origin + location.pathname}#/learn/${r.c.id}/${r.l.id}`,
+    start: gcalWhen(it.date, it.time || '20:00'), end: gcalWhen(it.date, addMinutes(it.time || '20:00', it.minutes || 30)),
+    reminders: { useDefault: false, overrides: [{ method: 'popup', minutes: 10 }] }
+  };
+}
+
 // 台灣時間（UTC+8，沒有日光節約）轉成 UTC，日曆 App 都能正確顯示
 const utcStamp = (day, time) => { const [y, m, d] = day.split('-').map(Number); const [hh, mm] = time.split(':').map(Number); return new Date(Date.UTC(y, m - 1, d, hh - 8, mm)).toISOString().replace(/[-:]/g, '').slice(0, 15) + 'Z'; };
 // 說明文字去掉格式符號（給 Google 日曆、.ics 用）
@@ -941,10 +1028,11 @@ pages.event = async (app, id) => {
     (placeText(e) ? `<p><strong>地點</strong><span dir="auto">${esc(placeText(e))}</span></p>` : '') +
     (e.url ? `<p><strong>連結</strong><span><a class="link" href="${esc(e.url)}" target="_blank" rel="noopener">${esc(e.url)}</a></span></p>` : '') +
     (c ? `<p><strong>課程</strong><span><a class="link" href="#/course/${c.id}">${esc(c.title)} →</a></span></p>` : '') +
-    `<div class="lesson-nav"><a class="btn btn-sm" href="${esc(googleCalUrl(e))}" target="_blank" rel="noopener">＋ 加入 Google 日曆</a>` +
+    '<div class="lesson-nav"><button type="button" class="btn btn-sm" id="gcal">＋ 加入 Google 日曆</button>' +
     '<button type="button" class="btn btn-ghost btn-sm" id="ics">⬇ 下載行事曆檔（Apple／Outlook）</button></div></div>' +
     (e.description ? `<div class="article">${renderArticle(e.description)}</div>` : '') + '</div>';
   app.querySelector('#ics').onclick = () => downloadIcs(e);
+  app.querySelector('#gcal').onclick = (ev) => addToGoogleCalendar([gcalEventOf(e)], googleCalUrl(e), ev.currentTarget);
 };
 
 // 活動通知信：由管理者自己的 Gmail 寄出（不是平台自動寄）。收件人放密件副本，每封最多 50 人
@@ -1652,7 +1740,7 @@ function editSchedule(c) {
     };
     box.onclick = async (e) => {
       if (e.target === box || e.target.id === 'sc-cancel') return close(false);
-      if (e.target.id === 'sc-gcal') window.open(studyGoogleUrl(c, mySchedules[c.id]), '_blank', 'noopener');
+      if (e.target.id === 'sc-gcal') addToGoogleCalendar([gcalStudyOf(c, mySchedules[c.id])], studyGoogleUrl(c, mySchedules[c.id]), e.target);
       if (e.target.id === 'sc-ics') downloadStudyIcs(c.id);
       if (e.target.id === 'sc-del' && confirm('把這門課從每週課表移除？')) { if (await save(null)) { toast('已從課表移除'); close(true); } }
     };
@@ -2277,6 +2365,7 @@ pages.plan = async (app, a, query, b) => {
   };
   app.innerHTML = '<div class="container editor"><a href="#/my" class="muted small">← 我的學習區</a>' +
     '<div class="row-between"><h1>📋 我的課表</h1><span class="lesson-nav"><a class="btn btn-ghost btn-sm" href="#/calendar">📅 行事曆</a>' +
+    ((Object.keys(mySchedules).length || plan.items.some((it) => it.date)) ? '<button type="button" class="btn btn-sm" id="gcal-all">＋ 全部加入 Google 日曆</button>' : '') +
     (plan.items.length ? '<a class="btn btn-sm" href="#/plan/play">▶ 播放</a><button type="button" class="btn btn-ghost btn-sm" id="plan-clear">清空單元課表</button>' : '') + '</span></div>' +
     weeklySection() +
     '<h2 class="plan-h">單元課表</h2>' +
@@ -2294,6 +2383,15 @@ pages.plan = async (app, a, query, b) => {
         '<button type="button" class="icon-btn" data-rm aria-label="從課表移除">✕</button></span></div>';
     }).join('') + '</div></div>';
   app.querySelectorAll('[data-week]').forEach((b) => { b.onclick = async () => { const c = findCourse(b.dataset.week); if (c && await editSchedule(c)) pages.plan(app); }; });
+  const gall = app.querySelector('#gcal-all');
+  if (gall) gall.onclick = () => {
+    const evs = [
+      ...Object.entries(mySchedules).map(([cid, sc]) => ({ c: findCourse(cid), sc })).filter(({ c, sc }) => c && hasJoined(c.id) && (sc.days || []).length).map(({ c, sc }) => gcalStudyOf(c, sc)),
+      ...plan.items.map((it) => ({ it, r: lessonRef(it) })).filter(({ it, r }) => r && it.date && it.date >= todayStr()).map(({ it, r }) => gcalPlanItemOf(it, r))
+    ];
+    if (!evs.length) return toast('還沒有設定時間的課表');
+    addToGoogleCalendar(evs, null, gall);
+  };
   const wics = app.querySelector('#week-ics');
   if (wics) wics.onclick = () => downloadStudyIcs();
   const clr = app.querySelector('#plan-clear');
