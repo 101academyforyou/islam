@@ -267,3 +267,21 @@ table.orders th { font-size: 12px; color: var(--muted); background: var(--soft);
 /* 我的課程／學習區：搜尋 */
 .my-search { max-width: 420px; margin: 4px 0 8px; }
 .my-list.filtering .my-tools { visibility: hidden; }
+
+/* 我的學習區：資料夾 */
+.folder { margin-bottom: 18px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--soft); padding: 10px 12px 2px; }
+.folder.drop-target { outline: 2px dashed var(--primary); outline-offset: 2px; }
+.folder-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.folder-name { cursor: pointer; font-size: 16px; }
+.folder-toggle { width: 28px; height: 28px; border: 0; background: none; color: var(--text); cursor: pointer; font-size: 14px; transition: transform .15s; }
+.folder.closed .folder-toggle { transform: rotate(-90deg); }
+.folder.closed:not(.searching) > .my-list { display: none; }
+.folder-actions { margin-left: auto; display: flex; gap: 6px; }
+.folder .my-list { margin-bottom: 10px; min-height: 40px; }
+.folder-empty { margin: 0; padding: 8px 4px; }
+.folder .my-card ~ .folder-empty { display: none; }
+.unfiled-title { margin: 8px 0 12px; font-size: 16px; color: var(--muted); }
+.move-folder { display: inline-flex; align-items: center; gap: 4px; margin-top: 6px; }
+.move-folder select { font: inherit; font-size: 13px; padding: 2px 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--card); color: var(--text); }
+#area.filtering .my-tools { visibility: hidden; }
+@media (max-width: 640px) { .folder-actions { margin-left: 0; } }
