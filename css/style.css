@@ -323,3 +323,16 @@ table.orders th { font-size: 12px; color: var(--muted); background: var(--soft);
 .icon { display: inline-block; vertical-align: -0.15em; flex-shrink: 0; }
 .site-stats span { display: inline-flex; align-items: center; gap: 6px; }
 .site-stats .icon { color: var(--primary); width: 1.15em; height: 1.15em; }
+
+/* 文章單元 */
+.article { line-height: 1.9; font-size: 1.02rem; }
+.article > :first-child { margin-top: 0; }
+.article h3, .article h4, .article h5 { margin: 1.4em 0 .5em; line-height: 1.4; }
+.article p, .article ul, .article ol, .article blockquote { margin: 0 0 1em; }
+.article ul, .article ol { padding-inline-start: 1.4em; }
+.article blockquote { border-inline-start: 4px solid var(--primary); padding: .4em 1em; background: var(--grid); border-radius: 6px; }
+.article img { max-width: 100%; height: auto; border-radius: 10px; display: block; margin: .6em 0; }
+.article hr { border: 0; border-top: 1px solid var(--border); margin: 1.6em 0; }
+.article-preview { margin: -4px 0 12px; }
+.article-preview summary { cursor: pointer; color: var(--primary); }
+.article-preview .article { border: 1px dashed var(--border); border-radius: 10px; padding: 12px 14px; margin-top: 8px; }
