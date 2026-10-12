@@ -2192,16 +2192,6 @@ pages.learn = async (app, id, query, lessonId) => {
 
 /* ---------------- 我的課表：每週固定時間 + 課表行事曆（只有自己看得到） ----------------
  * 資料在 islam_prefs/{Email}.schedules（在課程按「⏰ 加入我的課表」設定） */
-function weeklySection() {
-  const list = Object.entries(mySchedules).map(([cid, sc]) => ({ c: findCourse(cid), sc })).filter(({ c }) => c && hasJoined(c.id))
-    .sort((a, b) => (Math.min(...a.sc.days) - Math.min(...b.sc.days)) || a.sc.time.localeCompare(b.sc.time));
-  return '<h2 class="plan-h">每週固定時間</h2>' + (list.length
-    ? '<div class="plan-items">' + list.map(({ c, sc }) => `<div class="card plan-item"><span class="plan-no">⏰</span>` +
-        `<a class="plan-title" href="#/learn/${c.id}"><strong>${esc(c.title)}</strong><span class="muted small">${esc(scheduleText(sc))}</span></a>` +
-        `<span class="plan-acts"><button type="button" class="btn btn-ghost btn-sm" data-week="${esc(c.id)}">修改</button></span></div>`).join('') + '</div>'
-    : '<p class="muted small">在「我的學習區」或課程頁按「⏰ 加入我的課表」，就能設定每週固定的學習時間。</p>');
-}
-
 // #/plan：我的課表（每週固定時間 + 只顯示自己課表的行事曆）
 pages.plan = async (app, ym) => {
   if (!user) return go('/login?next=/plan');
@@ -2209,13 +2199,18 @@ pages.plan = async (app, ym) => {
   await accessReady;
   if (!document.body.contains(app)) return;
   const now = new Date();
+  // 月曆或週曆（記在這台電腦）；週曆像 Google 日曆一樣用時間軸呈現
+  let view = 'week';
+  try { view = localStorage.getItem('isl_plan_view') === 'month' ? 'month' : 'week'; } catch (e) {}
   let [y, m] = /^\d{4}-\d{2}$/.test(ym || '') ? ym.split('-').map(Number) : [now.getFullYear(), now.getMonth() + 1];
+  let weekStart = addDays(todayStr(), -now.getDay()); // 這週的星期日
+  if (/^\d{4}-\d{2}$/.test(ym || '')) { view = 'month'; }
   let picked = '';
   const has = Object.keys(mySchedules).some((id) => hasJoined(id) && findCourse(id));
-  function draw() {
+  const toMin = (t) => { const [h, mm] = t.split(':').map(Number); return h * 60 + mm; };
+  function monthHtml() {
     const first = new Date(y, m - 1, 1), days = new Date(y, m, 0).getDate();
-    const from = `${y}-${pad2(m)}-01`, to = `${y}-${pad2(m)}-${pad2(days)}`;
-    const occ = studyOccurrences(from, to).sort((a, b) => (a.start + a.startTime).localeCompare(b.start + b.startTime));
+    const occ = studyOccurrences(`${y}-${pad2(m)}-01`, `${y}-${pad2(m)}-${pad2(days)}`).sort((a, b) => (a.start + a.startTime).localeCompare(b.start + b.startTime));
     const cells = [];
     for (let i = 0; i < first.getDay(); i++) cells.push('<div class="cal-cell blank"></div>');
     for (let d = 1; d <= days; d++) {
@@ -2228,29 +2223,69 @@ pages.plan = async (app, ym) => {
         `<span class="cal-dots">${evs.slice(0, 4).map(() => '<i class="ev-study"></i>').join('')}</span></button>`);
     }
     const dayList = picked ? occ.filter((o) => o.start === picked) : null;
-    app.innerHTML = '<div class="container calendar">' +
-      '<div class="row-between"><h1>📋 我的課表</h1><span class="lesson-nav"><a class="btn btn-ghost btn-sm" href="#/calendar">📅 全部活動行事曆</a>' +
-      (has ? '<button type="button" class="btn btn-sm" id="gcal-all">＋ 全部加入 Google 日曆</button>' : '') + '</span></div>' +
-      weeklySection() +
-      (has ? '<p class="small"><button type="button" class="link small" id="week-ics">⬇ 下載日曆檔（Apple／Outlook）</button></p>' : '') +
-      '<h2 class="plan-h">課表行事曆</h2>' +
-      '<div class="cal-head"><button type="button" class="btn btn-ghost btn-sm" data-nav="-1" aria-label="上個月">‹</button>' +
-      `<h2>${y} 年 ${m} 月</h2><button type="button" class="btn btn-ghost btn-sm" data-nav="1" aria-label="下個月">›</button>` +
-      '<button type="button" class="btn btn-ghost btn-sm" data-nav="0">今天</button></div>' +
-      '<div class="cal-grid">' + WEEK.map((w) => `<div class="cal-w">${w}</div>`).join('') + cells.join('') + '</div>' +
+    return '<div class="cal-grid">' + WEEK.map((w) => `<div class="cal-w">${w}</div>`).join('') + cells.join('') + '</div>' +
       (dayList ? `<h3>${esc(dateLabel(picked))}</h3>` + (dayList.length
         ? '<div class="event-list">' + dayList.map((o) => `<a class="card event-row" href="#/learn/${o.id}"><span class="ev-date ev-study ev-time"><b>${o.startTime}</b><small>到 ${o.endTime}</small></span>` +
             `<span class="ev-main"><strong>${esc(o.title)}</strong><span class="muted small">${esc(scheduleText(o.schedule))}</span></span></a>`).join('') + '</div>'
-        : '<p class="muted">這一天沒有課。</p>') : (has ? '<p class="muted small">點日期可以看當天的課。</p>' : '')) +
+        : '<p class="muted">這一天沒有課。</p>') : '');
+  }
+  function weekHtml() {
+    const days = [...Array(7)].map((_, i) => addDays(weekStart, i));
+    const occ = studyOccurrences(days[0], days[6]);
+    // 時間軸範圍：依課表自動調整（至少 08:00–22:00）
+    let lo = 8 * 60, hi = 22 * 60;
+    occ.forEach((o) => { lo = Math.min(lo, toMin(o.startTime)); hi = Math.max(hi, toMin(o.endTime) || toMin(o.startTime) + 30); });
+    lo = Math.floor(lo / 60) * 60; hi = Math.min(24 * 60, Math.ceil(hi / 60) * 60);
+    const H = 48; // 每小時的高度（px）
+    const hours = [];
+    for (let t = lo; t < hi; t += 60) hours.push(t);
+    const nowMin = now.getHours() * 60 + now.getMinutes();
+    return '<div class="wk" style="--wk-h:' + H + 'px">' +
+      '<div class="wk-head"><span></span>' + days.map((d) => { const [, mm, dd] = parseDay(d); return `<span class="${d === todayStr() ? 'today' : ''}">${WEEK[new Date(...(([a, b, c]) => [a, b - 1, c])(parseDay(d))).getDay()]}<b><i class="wk-m">${mm}/</i>${dd}</b></span>`; }).join('') + '</div>' +
+      `<div class="wk-body" style="height:${hours.length * H}px">` +
+      '<div class="wk-times">' + hours.map((t) => `<span style="top:${(t - lo) / 60 * H}px">${pad2(t / 60)}:00</span>`).join('') + '</div>' +
+      days.map((d) => `<div class="wk-col${d === todayStr() ? ' today' : ''}">` +
+        hours.map((t) => `<i class="wk-line" style="top:${(t - lo) / 60 * H}px"></i>`).join('') +
+        (d === todayStr() && nowMin >= lo && nowMin <= hi ? `<i class="wk-now" style="top:${(nowMin - lo) / 60 * H}px"></i>` : '') +
+        occ.filter((o) => o.start === d).map((o) => {
+          const s = toMin(o.startTime), e = Math.max(s + 15, toMin(o.endTime) || s + 30);
+          return `<a class="wk-ev ev-study" href="#/learn/${o.id}" style="top:${(s - lo) / 60 * H}px;height:${(e - s) / 60 * H - 2}px" title="${esc(o.title)} ${o.startTime}–${o.endTime}">` +
+            `<b>${esc(o.title)}</b><small>${o.startTime}–${o.endTime}</small></a>`;
+        }).join('') + '</div>').join('') + '</div></div>';
+  }
+  function draw() {
+    const title = view === 'week'
+      ? (() => { const [y1, m1, d1] = parseDay(weekStart), [, m2, d2] = parseDay(addDays(weekStart, 6)); return `${y1} 年 ${m1}/${d1} – ${m2}/${d2}`; })()
+      : `${y} 年 ${m} 月`;
+    const list = Object.entries(mySchedules).map(([cid, sc]) => ({ c: findCourse(cid), sc })).filter(({ c }) => c && hasJoined(c.id))
+      .sort((a, b) => (Math.min(...a.sc.days) - Math.min(...b.sc.days)) || a.sc.time.localeCompare(b.sc.time));
+    app.innerHTML = '<div class="container calendar my-timetable">' +
+      '<div class="row-between"><h1>📋 我的課表</h1><span class="lesson-nav"><a class="btn btn-ghost btn-sm" href="#/calendar">📅 全部活動行事曆</a>' +
+      (has ? '<button type="button" class="btn btn-sm" id="gcal-all">＋ 全部加入 Google 日曆</button>' : '') + '</span></div>' +
+      '<div class="cal-head"><button type="button" class="btn btn-ghost btn-sm" data-nav="-1" aria-label="上一頁">‹</button>' +
+      `<h2>${title}</h2><button type="button" class="btn btn-ghost btn-sm" data-nav="1" aria-label="下一頁">›</button>` +
+      '<button type="button" class="btn btn-ghost btn-sm" data-nav="0">今天</button>' +
+      `<span class="view-switch cal-filters" role="group" aria-label="檢視"><button type="button" data-view="week" aria-pressed="${view === 'week'}">週</button><button type="button" data-view="month" aria-pressed="${view === 'month'}">月</button></span></div>` +
+      (has ? '' : '<p class="notice small">還沒有課表。到「我的學習區」或課程頁按「⏰ 加入我的課表」設定每週的學習時間，就會顯示在這裡。</p>') +
+      (view === 'week' ? weekHtml() : monthHtml()) +
+      '<h3 class="plan-h">每週固定時間</h3>' + (list.length
+        ? '<div class="week-list">' + list.map(({ c, sc }) => `<div class="week-row"><i class="dot-sw ev-study"></i><a href="#/learn/${c.id}"><strong>${esc(c.title)}</strong></a>` +
+            `<span class="muted small">${esc(scheduleText(sc))}</span><button type="button" class="link small" data-week="${esc(c.id)}">修改</button></div>`).join('') + '</div>' +
+          '<p class="small"><button type="button" class="link small" id="week-ics">⬇ 下載日曆檔（Apple／Outlook）</button></p>'
+        : '<p class="muted small">在「我的學習區」或課程頁按「⏰ 加入我的課表」，就能設定每週固定的學習時間。</p>') +
       '</div>';
+    if (view === 'week') { const body = app.querySelector('.wk-ev'); if (body) body.scrollIntoView({ block: 'nearest' }); }
   }
   app.onclick = async (e) => {
+    const v = e.target.closest('[data-view]');
+    if (v) { view = v.dataset.view; try { localStorage.setItem('isl_plan_view', view); } catch (err) {} picked = ''; return draw(); }
     const nav = e.target.closest('[data-nav]');
     if (nav) {
       const n = +nav.dataset.nav;
-      if (n === 0) { y = now.getFullYear(); m = now.getMonth() + 1; } else { m += n; if (m < 1) { m = 12; y--; } if (m > 12) { m = 1; y++; } }
+      if (view === 'week') weekStart = n === 0 ? addDays(todayStr(), -now.getDay()) : addDays(weekStart, n * 7);
+      else if (n === 0) { y = now.getFullYear(); m = now.getMonth() + 1; } else { m += n; if (m < 1) { m = 12; y--; } if (m > 12) { m = 1; y++; } }
       picked = '';
-      history.replaceState(null, '', `#/plan/${y}-${pad2(m)}`);
+      if (view === 'month') history.replaceState(null, '', `#/plan/${y}-${pad2(m)}`);
       return draw();
     }
     const cell = e.target.closest('[data-day]');
