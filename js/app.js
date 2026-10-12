@@ -7,7 +7,7 @@
  * 安全規則在 1.01academy repo 的 firestore.rules。
  */
 // 這個網站的 Firestore 集合名稱
-const COL = { courses: 'islam_courses', videos: 'islam_courseVideos', enroll: 'islam_enroll', prefs: 'islam_prefs', students: 'islam_students', notes: 'islam_notes' };
+const COL = { courses: 'islam_courses', videos: 'islam_courseVideos', enroll: 'islam_enroll', prefs: 'islam_prefs', students: 'islam_students', notes: 'islam_notes', posts: 'islam_posts', counts: 'islam_counts', counted: 'islam_counted' };
 const FIREBASE = 'https://www.gstatic.com/firebasejs/10.12.2/';
 const CONFIG = window.SITE_CONFIG || {};
 const configured = !!(CONFIG.firebaseConfig && CONFIG.firebaseConfig.apiKey);
@@ -23,6 +23,7 @@ let accessReady = Promise.resolve();
 const videoCache = {};   // 課程 id → { 單元 id: YouTube ID }
 let courses = COURSES;   // 課程目錄：優先讀 Firestore 的 courses 集合，讀不到時用 data.js
 let coursesFromDb = false;
+let joinCount = {};      // 課程 id → 加入學習的累計人數（islam_counts/{課程id}.n，移出學習區不會減少）
 
 /* ---------------- 小工具 ---------------- */
 const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
@@ -178,7 +179,22 @@ async function joinCourse(c, btn, stay = false) {
   btn.disabled = true;
   try {
     const at = Date.now();
-    await fb.setDoc(fb.doc(db, COL.enroll, user.email.toLowerCase(), 'courses', c.id), { joinedAt: at });
+    const ref = fb.doc(db, COL.enroll, user.email.toLowerCase(), 'courses', c.id);
+    // 第一次加入這門課時，學習人數 +1（同一個批次寫入，規則才能確認是真的加入；每人每門課只算一次）
+    const mark = fb.doc(db, COL.counted, user.email.toLowerCase(), 'courses', c.id);
+    let counted = false;
+    try {
+      if (!(await fb.getDoc(mark)).exists()) {
+        const b = fb.writeBatch(db);
+        b.set(ref, { joinedAt: at });
+        b.set(mark, { at });
+        b.set(fb.doc(db, COL.counts, c.id), { n: fb.increment(1) }, { merge: true });
+        await b.commit();
+        joinCount[c.id] = (joinCount[c.id] || 0) + 1;
+        counted = true;
+      }
+    } catch (e) { console.warn('人數未更新', e); }
+    if (!counted) await fb.setDoc(ref, { joinedAt: at });
     if (!joined.includes(c.id)) joined.push(c.id);
     joinedAt[c.id] = at;
     syncStudent(true);
@@ -192,6 +208,7 @@ async function joinCourse(c, btn, stay = false) {
 
 // 從我的學習區移除（進度紀錄保留在瀏覽器）
 async function leaveCourse(c) {
+  // 學習人數是累計的，移出不會減少
   await fb.deleteDoc(fb.doc(db, COL.enroll, user.email.toLowerCase(), 'courses', c.id));
   joined = joined.filter((id) => id !== c.id);
   delete joinedAt[c.id];
@@ -213,6 +230,7 @@ async function saveArea(order, folders) {
 
 // 從 Firestore 讀取課程目錄；資料庫還沒有課程時，沿用 data.js
 async function loadCourses() {
+  const counts = loadCounts();
   try {
     const snap = await fb.getDocs(fb.collection(db, COL.courses));
     if (!snap.empty) {
@@ -223,7 +241,18 @@ async function loadCourses() {
   } catch (e) {
     console.error(e);
   }
+  await counts;
 }
+
+// 每門課加入學習的人數（任何人都看得到）
+async function loadCounts() {
+  try {
+    const snap = await fb.getDocs(fb.collection(db, COL.counts));
+    joinCount = {};
+    snap.docs.forEach((d) => { joinCount[d.id] = Math.max(0, Number(d.data().n) || 0); });
+  } catch (e) { console.error(e); }
+}
+const countText = (c) => joinCount[c.id] > 0 ? `<span class="learners">👥 ${joinCount[c.id].toLocaleString()} 人加入學習</span>` : '';
 
 async function loadVideos(courseId) {
   if (videoCache[courseId]) return videoCache[courseId];
@@ -259,7 +288,7 @@ function renderHeader() {
     '<nav>' +
     '<a href="#/">學習地圖</a>' +
     (user
-      ? `<a href="#/my">我的學習區</a>${isAdmin() ? '<a href="#/admin">管理</a>' : ''}<span class="muted small user-name" title="${esc(user.email)}">${esc(name)}</span><button class="link" id="logout">登出</button>`
+      ? `<a href="#/my">我的學習區</a>${isAdmin() ? '<a href="#/admin">管理</a>' : ''}<a class="muted small user-name" href="#/account" title="帳號設定（${esc(user.email)}）">${esc(name)}</a><button class="link" id="logout">登出</button>`
       : '<a href="#/login" class="btn btn-sm">登入</a>') +
     '<button class="icon-btn" id="theme" aria-label="切換深淺色"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></button>' +
     '</nav></div>';
@@ -302,7 +331,7 @@ pages.home = (app) => {
     `<span class="step-no">${n ? n : '–'}</span>${thumb(c)}<div class="step-body">` +
     `<span class="tag">${[n ? `第 ${n} 階段` : '', c.category, c.level, c.unlisted ? '不公開' : '', c.published === false ? '未上架' : ''].filter(Boolean).map(esc).join(' · ')}</span>` +
     `<h3>${esc(c.title)}</h3>` + (c.subtitle ? `<p class="muted small">${esc(c.subtitle)}</p>` : '') +
-    `<p class="muted small">${lessonsOf(c).length} 個單元${minutesText(c)}</p>` +
+    `<p class="muted small">${lessonsOf(c).length} 個單元${minutesText(c)}${joinCount[c.id] > 0 ? ' · ' + countText(c) : ''}</p>` +
     `<div class="step-foot">${statusOf(c) || '<span class="price free">免費</span>'}${joinBtn(c)}</div></div></a>`;
   app.innerHTML =
     '<section class="hero"><div class="container">' +
@@ -380,11 +409,114 @@ pages.course = (app, id) => {
       `<div class="card chapter"><strong>${esc(ch.title)}</strong>` +
       ch.lessons.map((l) => `<div class="lesson"><span>${mine ? '▶' : '🔒'} ${esc(l.title)}</span><span class="muted small">${clock(l.duration)}</span></div>`).join('') +
       '</div>').join('') +
+    '<h2 id="talk">💬 心得分享與交流</h2><div class="talk" id="posts"></div>' +
     '</div>' +
-    `<aside class="card buy">${thumb(c)}<div class="pad">${box}</div></aside></div>`;
+    `<aside class="card buy">${thumb(c)}<div class="pad">${box}${countText(c) ? `<p class="muted small center">${countText(c)}</p>` : ''}</div></aside></div>`;
   const joinBtn = app.querySelector('#join');
   if (joinBtn) joinBtn.onclick = () => joinCourse(c, joinBtn);
+  renderPosts(app.querySelector('#posts'), c);
 };
+
+/* ---------------- 心得分享與交流 ----------------
+ * islam_posts/{課程id}/posts/{留言id} = { uid, name, text, createdAt, replyTo, admin }
+ * 登入的人都看得到；加入課程的學生和管理者可以發言、回覆；作者可修改、刪除自己的留言，管理者可刪除任何留言 */
+const postName = () => (user.displayName || '').trim().slice(0, 40) || (user.email.split('@')[0].slice(0, 3) + '***');
+async function renderPosts(el, c) {
+  if (!el) return;
+  if (!user) {
+    el.innerHTML = `<div class="card pad muted small">登入後就能看到大家的學習心得，加入課程後也可以一起分享交流。<a class="link" href="#/login?next=/course/${c.id}">登入 →</a></div>`;
+    return;
+  }
+  if (!isVerified()) {
+    el.innerHTML = '<div class="card pad muted small">完成 Email 驗證後就能看到交流區。<a class="link" href="#/verify">前往驗證 →</a></div>';
+    return;
+  }
+  const canPost = isAdmin() || hasJoined(c.id);
+  const col = fb.collection(db, COL.posts, c.id, 'posts');
+  let posts = [], replying = '', editing = '';
+  el.innerHTML = '<p class="muted small">載入交流區…</p>';
+  try {
+    const snap = await fb.getDocs(col);
+    posts = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  } catch (e) {
+    console.error(e);
+    el.innerHTML = '<p class="muted small">交流區暫時無法載入，請稍後再試。</p>';
+    return;
+  }
+  const mineOf = (p) => p.uid === user.uid;
+  const box = (id, ph, val = '', btn = '發表') =>
+    `<form class="post-form" data-form="${id}"><textarea class="input textarea" rows="${id === 'new' ? 4 : 3}" maxlength="2000" placeholder="${ph}">${esc(val)}</textarea>` +
+    `<div class="post-actions">${id !== 'new' ? '<button type="button" class="btn btn-ghost btn-sm" data-act="cancel">取消</button>' : ''}<button class="btn btn-sm">${btn}</button></div></form>`;
+  const item = (p, isReply) => {
+    const acts = [];
+    if (!isReply && canPost) acts.push(`<button type="button" class="link small" data-act="reply" data-id="${p.id}">回覆</button>`);
+    if (mineOf(p)) acts.push(`<button type="button" class="link small" data-act="edit" data-id="${p.id}">編輯</button>`);
+    if (mineOf(p) || isAdmin()) acts.push(`<button type="button" class="link small" data-act="del" data-id="${p.id}">刪除</button>`);
+    return `<div class="post${isReply ? ' reply' : ''}${mineOf(p) ? ' mine' : ''}">` +
+      `<div class="post-meta"><strong>${esc(p.name || '學員')}</strong>${p.admin ? ' <span class="tag">管理者</span>' : ''}` +
+      `<span class="muted small">${fmtTime(p.createdAt)}${p.editedAt ? '（已編輯）' : ''}</span></div>` +
+      (editing === p.id ? box('edit:' + p.id, '', p.text, '儲存') : `<div class="post-text">${linkify(esc(p.text))}</div>`) +
+      (acts.length && editing !== p.id ? `<div class="post-acts">${acts.join('')}</div>` : '') + '</div>';
+  };
+  const draw = () => {
+    const tops = posts.filter((p) => !p.replyTo).sort((a, b) => b.createdAt - a.createdAt);
+    const repliesOf = (id) => posts.filter((p) => p.replyTo === id).sort((a, b) => a.createdAt - b.createdAt);
+    el.innerHTML =
+      (canPost ? box('new', '分享你的學習心得、感想或問題…（大家都看得到）')
+        : '<div class="card pad muted small">加入這門課程後，就可以分享心得、參與交流。</div>') +
+      (tops.length ? tops.map((p) => '<div class="card thread">' + item(p, false) +
+        repliesOf(p.id).map((r) => item(r, true)).join('') +
+        (replying === p.id ? '<div class="post reply">' + box('reply:' + p.id, '寫下你的回覆…', '', '回覆') + '</div>' : '') + '</div>').join('')
+        : '<p class="muted small">還沒有人分享，成為第一個分享心得的人吧！</p>');
+    const ta = replying ? el.querySelector(`[data-form="reply:${replying}"] textarea`) : editing ? el.querySelector(`[data-form="edit:${editing}"] textarea`) : null;
+    if (ta) ta.focus();
+  };
+  el.onclick = async (e) => {
+    const b = e.target.closest('[data-act]');
+    if (!b) return;
+    const act = b.dataset.act, id = b.dataset.id;
+    if (act === 'reply') { replying = replying === id ? '' : id; editing = ''; draw(); }
+    if (act === 'edit') { editing = id; replying = ''; draw(); }
+    if (act === 'cancel') { replying = editing = ''; draw(); }
+    if (act === 'del') {
+      if (!confirm('確定刪除這則留言？')) return;
+      // 管理者刪除主留言時，一併刪除底下的回覆
+      const ids = [id, ...(isAdmin() ? posts.filter((p) => p.replyTo === id).map((p) => p.id) : [])];
+      try {
+        for (const x of ids) await fb.deleteDoc(fb.doc(db, COL.posts, c.id, 'posts', x));
+        posts = posts.filter((p) => !ids.includes(p.id));
+        draw(); toast('已刪除');
+      } catch (err) { toast('刪除失敗：' + (err.code || err.message)); }
+    }
+  };
+  el.onsubmit = async (e) => {
+    e.preventDefault();
+    const form = e.target, kind = form.dataset.form, text = form.querySelector('textarea').value.trim();
+    if (!text) return toast('請輸入內容');
+    const btn = form.querySelector('button:not([type=button])');
+    btn.disabled = true;
+    try {
+      if (kind.startsWith('edit:')) {
+        const id = kind.slice(5), editedAt = Date.now();
+        await fb.setDoc(fb.doc(db, COL.posts, c.id, 'posts', id), { text, editedAt }, { merge: true });
+        Object.assign(posts.find((p) => p.id === id), { text, editedAt });
+        editing = '';
+      } else {
+        const p = { uid: user.uid, name: postName(), text, createdAt: Date.now(), replyTo: kind.startsWith('reply:') ? kind.slice(6) : '', admin: isAdmin() };
+        const id = newId('p');
+        await fb.setDoc(fb.doc(db, COL.posts, c.id, 'posts', id), p);
+        posts.push({ id, ...p });
+        replying = '';
+        toast(p.replyTo ? '已回覆' : '已發表');
+      }
+      draw();
+    } catch (err) {
+      btn.disabled = false;
+      toast('送出失敗：' + (err.code || err.message));
+    }
+  };
+  draw();
+}
 
 // 登入 / 註冊
 pages.login = (app, _, query) => {
@@ -522,7 +654,8 @@ pages.my = (app) => {
   app.innerHTML = '<div class="container"><div class="row-between"><h1>我的學習區</h1>' +
     '<span class="lesson-nav">' + exportMenu('export-all', '匯出全部筆記') +
     '<button type="button" class="btn btn-ghost btn-sm" id="newfolder">＋ 新增資料夾</button>' +
-    '<a class="btn btn-ghost btn-sm" href="#/">＋ 加入更多課程</a></span></div>' +
+    '<a class="btn btn-ghost btn-sm" href="#/">＋ 加入更多課程</a>' +
+    '<a class="btn btn-ghost btn-sm" href="#/account">⚙ 帳號設定</a></span></div>' +
     (all.length
       ? '<input class="input my-search" id="myq" type="search" placeholder="搜尋我的課程…" aria-label="搜尋我的課程" autocomplete="off"/>' +
         '<p class="muted small" id="myhint">按住 ⠿ 拖曳可調整順序、移進或移出資料夾；也可以按 ↑ ↓，或在課程的「📁」選擇資料夾。會自動儲存。</p>' +
@@ -858,6 +991,7 @@ pages.learn = async (app, id, query, lessonId) => {
     '<span class="lesson-nav"><span class="muted small" id="note-state"></span>' +
     exportMenu('note-export', '匯出筆記') + '</span></div>' +
     `<textarea class="input textarea" id="note" rows="7" placeholder="在這裡記下這個單元的重點…（自動儲存，只有你看得到）">${esc((myNotes[cur.id] || {}).text || '')}</textarea></div>` +
+    '<div class="pad"><h3>💬 心得分享與交流</h3><div class="talk" id="posts"></div></div>' +
     '</div>' +
     `<aside class="side"><div class="pad"><strong>${esc(c.title)}</strong><div class="bar"><i style="width:${progress(c)}%"></i></div>` +
     `<span class="muted small">進度 ${progress(c)}%</span>` +
@@ -877,6 +1011,7 @@ pages.learn = async (app, id, query, lessonId) => {
   };
   noteEl.onblur = flushNote;
   bindExportMenu(app.querySelector('#note-export'), (fmt) => exportNotes([c], `notes-${safeName(c.id)}`, fmt));
+  renderPosts(app.querySelector('#posts'), c);
 
   app.querySelector('#done').onclick = () => {
     setDone(c.id, cur.id, !isDone);
@@ -1054,6 +1189,22 @@ pages.playlist = (app) => {
 
 // 學生名單：加入過伊斯蘭網站課程的學生（islam_students），可搜尋、匯出 CSV
 const fmtDate = (ms) => { if (!ms) return ''; const d = new Date(ms); return `${d.getFullYear()}/${pad2(d.getMonth() + 1)}/${pad2(d.getDate())}`; };
+// 依學生名單校正每門課的學習人數（管理者打開學生名單時自動補上這個功能上線前就加入的學生；人數是累計的，只會往上補）
+async function syncCounts(list) {
+  await loadCounts(); // 以資料庫目前的數字為準
+  const real = {};
+  list.forEach((s) => s.items.forEach((x) => { real[x.id] = (real[x.id] || 0) + 1; }));
+  const ids = new Set([...Object.keys(real), ...Object.keys(joinCount)]);
+  for (const id of ids) {
+    const n = real[id] || 0;
+    if ((joinCount[id] || 0) >= n) continue;
+    try {
+      await fb.setDoc(fb.doc(db, COL.counts, id), { n });
+      joinCount[id] = n;
+    } catch (e) { console.error('人數校正失敗', id, e); }
+  }
+}
+
 pages.students = async (app) => {
   if (!adminGuard(app)) return;
   app.innerHTML = '<div class="container"><p class="muted">載入中…</p></div>';
@@ -1070,12 +1221,13 @@ pages.students = async (app) => {
     return;
   }
   if (!document.body.contains(app)) return;
+  syncCounts(list);
   const title = (id) => (findCourse(id) || {}).title || id + '（已刪除的課程）';
   let q = '';
   app.innerHTML = '<div class="container editor">' + adminTabs('students') +
     '<div class="row-between"><h1>學生名單</h1><button type="button" class="btn btn-ghost btn-sm" id="csv">⬇ 匯出 CSV</button></div>' +
     `<p class="muted small">共 ${list.length} 位學生、${list.reduce((n, s) => n + s.items.length, 0)} 筆加入紀錄。依最近加入時間排列。` +
-    '學生加入或移出課程時會自動更新；更新這個功能之前就加入的學生，會在他下次登入網站時出現。</p>' +
+    '學生加入或移出課程時會自動更新，課程顯示的「加入學習人數」（累計）也會依這份名單補齊；更新這個功能之前就加入的學生，會在他下次登入網站時出現。</p>' +
     '<input class="input" id="sq" type="search" placeholder="搜尋 Email 或姓名" autocomplete="off"/>' +
     '<div id="slist"></div></div>';
   const shown = () => list.filter((s) => !q || (s.email + ' ' + (s.name || '')).toLowerCase().includes(q));
@@ -1322,6 +1474,48 @@ function infoPage(app, title, body) {
     `<p class="muted small">最後更新：${esc(SITE_PAGES.updated)} · 聯絡我們：<a class="link" href="mailto:${esc(SITE_PAGES.email)}">${esc(SITE_PAGES.email)}</a></p></div>`;
 }
 const sections = (list) => list.map(([h, t]) => `<h2>${esc(h)}</h2><p>${paragraphs(t)}</p>`).join('');
+// 帳號設定：修改顯示名稱（交流區留言、學生名單會用這個名稱）
+pages.account = (app) => {
+  if (!user) return go('/login?next=/account');
+  app.innerHTML = '<div class="container narrow"><h1>帳號設定</h1><form class="card pad" id="acct">' +
+    `<label>Email<input class="input" value="${esc(user.email)}" disabled/></label>` +
+    `<label>名稱<input class="input" name="name" maxlength="40" required value="${esc(user.displayName || '')}" placeholder="例如：小明"/></label>` +
+    '<p class="muted small">名稱會顯示在網站右上角、心得分享與交流區的留言上（不會顯示 Email）。修改後，你以前的留言也會一起換成新名稱。</p>' +
+    '<button class="btn btn-block" id="save-name">儲存</button></form></div>';
+  const f = app.querySelector('#acct');
+  f.onsubmit = async (e) => {
+    e.preventDefault();
+    const name = f.name.value.trim().slice(0, 40);
+    if (!name) return toast('請輸入名稱');
+    const btn = f.querySelector('#save-name');
+    btn.disabled = true;
+    try {
+      await fb.updateProfile(auth.currentUser, { displayName: name });
+      user = auth.currentUser;
+      renderHeader();
+      if (isVerified()) {
+        syncStudent(true);
+        renamePosts(name);
+      }
+      toast('名稱已更新');
+    } catch (err) {
+      toast('更新失敗：' + (err.code || err.message));
+    } finally { btn.disabled = false; }
+  };
+};
+// 把自己以前在交流區的留言換成新名稱
+async function renamePosts(name) {
+  for (const c of courses) {
+    try {
+      const col = fb.collection(db, COL.posts, c.id, 'posts');
+      const snap = await fb.getDocs(fb.query(col, fb.where('uid', '==', user.uid)));
+      for (const d of snap.docs) {
+        if (d.data().uid === user.uid && d.data().name !== name) await fb.setDoc(fb.doc(db, COL.posts, c.id, 'posts', d.id), { name }, { merge: true });
+      }
+    } catch (e) { console.warn('留言名稱未更新', c.id, e); }
+  }
+}
+
 pages.faq = (app) => infoPage(app, '常見問題', faqList(SITE_PAGES.faq));
 pages.privacy = (app) => infoPage(app, '隱私權政策', sections(SITE_PAGES.privacy));
 pages.terms = (app) => infoPage(app, '服務條款', sections(SITE_PAGES.terms));

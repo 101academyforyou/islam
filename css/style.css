@@ -301,3 +301,18 @@ table.orders th { font-size: 12px; color: var(--muted); background: var(--soft);
 .export-list { position: absolute; right: 0; top: calc(100% + 6px); z-index: 20; min-width: 180px; padding: 6px; display: grid; gap: 2px; background: var(--card); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 12px 28px -12px rgba(15, 23, 42, .35); }
 .export-list button { text-align: left; padding: 8px 10px; border: 0; border-radius: 6px; background: none; color: var(--text); font: inherit; font-size: 14px; cursor: pointer; }
 .export-list button:hover { background: var(--soft); }
+
+/* 心得分享與交流 */
+.talk { display: grid; gap: 12px; }
+.post-form textarea { width: 100%; }
+.post-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
+.thread { padding: 14px 16px; }
+.post + .post { border-top: 1px solid var(--border); margin-top: 12px; padding-top: 12px; }
+.post.reply { margin-left: 24px; }
+.post-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.post-text { margin-top: 6px; white-space: pre-wrap; word-break: break-word; line-height: 1.7; }
+.post-acts { display: flex; gap: 14px; margin-top: 6px; }
+@media (max-width: 600px) { .post.reply { margin-left: 12px; } }
+
+/* 加入學習人數 */
+.learners { white-space: nowrap; }
