@@ -534,3 +534,4 @@ table.orders th { font-size: 12px; color: var(--muted); background: var(--soft);
 .modal-x { position: absolute; top: 10px; right: 10px; width: 32px; height: 32px; border: 0; border-radius: 50%; background: transparent; color: var(--muted); font-size: 16px; cursor: pointer; }
 .modal-x:hover { background: var(--grid); color: var(--text); }
 #pt-sum { color: var(--primary); font-weight: 600; min-height: 1.4em; margin: 2px 0 8px; }
+.ev-date.ev-time { width: 64px; } .ev-date.ev-time b { font-size: 1.05rem; }
