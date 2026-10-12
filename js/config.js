@@ -17,7 +17,7 @@ window.SITE_CONFIG = {
   // 網站名稱與首頁文字
   siteName: '循序漸進學伊斯蘭',
   tagline: '一步一步，認識伊斯蘭',
-  intro: '從最基礎開始，依照學習路線循序漸進。所有課程免費，登入後加入課程即可觀看。',
+  intro: '從最基礎開始，依照學習地圖循序漸進。所有課程免費，登入後加入課程即可觀看。',
 
   // YouTube Data API 金鑰：管理頁「從播放清單建立課程」用（留空也可以，在頁面上貼上即可）
   // 請在 Google Cloud 主控台限制只能用於 islam.onepointzeroone.org，並只啟用 YouTube Data API v3

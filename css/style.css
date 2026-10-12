@@ -222,7 +222,7 @@ table.orders th { font-size: 12px; color: var(--muted); background: var(--soft);
 .grant-exp { display: flex; align-items: center; gap: 8px; margin: 0; font-weight: 500; }
 .grant-exp .input { width: auto; height: 36px; margin: 0; }
 
-/* 學習路線 */
+/* 學習地圖 */
 .path { display: grid; gap: 14px; margin-bottom: 32px; counter-reset: step; }
 .step { position: relative; display: grid; grid-template-columns: 44px 200px 1fr; gap: 18px; align-items: center; padding: 14px; text-decoration: none; color: inherit; transition: transform .2s, box-shadow .2s; }
 .step:hover { transform: translateY(-2px); box-shadow: 0 18px 36px -18px rgba(15, 23, 42, .35); }
@@ -241,7 +241,7 @@ table.orders th { font-size: 12px; color: var(--muted); background: var(--soft);
   .path .step:not(:last-child)::after { left: 31px; }
 }
 
-/* 學習路線卡片底部：狀態 + 加入學習區 */
+/* 學習地圖卡片底部：狀態 + 加入學習區 */
 .step-foot { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .hero .search { max-width: 520px; margin: 20px auto 0; display: block; }
 /* 我的學習區：一列一門課，拖曳或 ↑ ↓ 排序 */
