@@ -894,14 +894,26 @@ function gcalSessionOf(it, c, l) {
     reminders: { useDefault: false, overrides: [{ method: 'popup', minutes: 10 }] }
   };
 }
+// 系列課程裡單獨移動過的那幾次：從重複規則排除，另外加成單一活動
+const seriesExdate = (sc) => seriesMoves(sc).map(([orig]) => `${compact(orig)}T${sc.time.replace(':', '')}00`);
+function gcalMovedOf(c, sc) {
+  return seriesMoves(sc).map(([orig, mv]) => ({
+    id: gcalId('m' + c.id + '/' + orig),
+    summary: '學習：' + c.title,
+    description: '繼續上課：' + location.origin + location.pathname + '#/learn/' + c.id,
+    start: gcalWhen(mv.date, mv.time || sc.time), end: gcalWhen(mv.date, addMinutes(mv.time || sc.time, sc.minutes)),
+    reminders: { useDefault: false, overrides: [{ method: 'popup', minutes: 10 }] }
+  }));
+}
 function gcalStudyOf(c, sc) {
   const d = studyFirstDay(sc);
+  const ex = seriesExdate(sc);
   return {
     id: gcalId('s' + c.id),
     summary: '學習：' + c.title,
     description: '繼續上課：' + location.origin + location.pathname + '#/learn/' + c.id,
     start: gcalWhen(d, sc.time), end: gcalWhen(d, addMinutes(sc.time, sc.minutes)),
-    recurrence: [studyRule(sc)],
+    recurrence: [studyRule(sc), ...(ex.length ? ['EXDATE;TZID=Asia/Taipei:' + ex.join(',')] : [])],
     reminders: { useDefault: false, overrides: [{ method: 'popup', minutes: 10 }] }
   };
 }
@@ -1648,18 +1660,24 @@ function scheduleText(sc) {
   return `${d} ${sc.time}（${sc.minutes} 分鐘）` + (sc.until ? `，到 ${sc.until.replace(/-/g, '/')}` : '');
 }
 // 期間內的每一次學習時間（給行事曆用）
+// 系列課程的某一天是不是本來就有課（星期幾符合、在開始與結束日期之間）
+const isSeriesDay = (sc, d) => (!sc.start || d >= sc.start) && (!sc.until || d <= sc.until) &&
+  sc.days.includes(new Date(...(([y, m, dd]) => [y, m - 1, dd])(parseDay(d))).getDay());
+// 單次調整：sc.moves = { 原本的日期: { date, time } }（只移動那一次，不影響其他週）
+const seriesMoves = (sc) => Object.entries(sc.moves || {}).filter(([orig, mv]) => mv && isSeriesDay(sc, orig) && /^\d{4}-\d{2}-\d{2}$/.test(mv.date || ''));
 function studyOccurrences(from, to) {
   const out = [];
   Object.entries(mySchedules).forEach(([cid, sc]) => {
     const c = findCourse(cid);
     if (!c || !hasJoined(cid) || !(sc.days || []).length) return;
+    const mk = (orig, date, time) => ({ id: cid, orig, moved: orig !== date || time !== sc.time, study: true, title: c.title, type: '我的學習', start: date, end: '', startTime: time, endTime: addMinutes(time, sc.minutes), schedule: sc });
+    const moves = sc.moves || {};
     let d = sc.start && sc.start > from ? sc.start : from;
     const last = sc.until && sc.until < to ? sc.until : to;
     for (let n = 0; d <= last && n < 400; n++, d = addDays(d, 1)) {
-      if (sc.days.includes(new Date(...(([y, m, dd]) => [y, m - 1, dd])(parseDay(d))).getDay())) {
-        out.push({ id: cid, study: true, title: c.title, type: '我的學習', start: d, end: '', startTime: sc.time, endTime: addMinutes(sc.time, sc.minutes), schedule: sc });
-      }
+      if (isSeriesDay(sc, d) && !moves[d]) out.push(mk(d, d, sc.time));
     }
+    seriesMoves(sc).forEach(([orig, mv]) => { if (mv.date >= from && mv.date <= to) out.push(mk(orig, mv.date, mv.time || sc.time)); });
   });
   return out;
 }
@@ -1696,8 +1714,12 @@ function downloadStudyIcs(onlyId) {
     const c = findCourse(cid), d = studyFirstDay(sc);
     return ['BEGIN:VEVENT', `UID:study-${cid}@islam.onepointzeroone.org`, `DTSTAMP:${stamp}`,
       `DTSTART:${utcStamp(d, sc.time)}`, `DTEND:${utcStamp(d, addMinutes(sc.time, sc.minutes))}`, studyRule(sc),
+      ...seriesMoves(sc).map(([orig]) => `EXDATE:${utcStamp(orig, sc.time)}`),
       `SUMMARY:${escIcs('學習：' + c.title)}`, `DESCRIPTION:${escIcs('繼續上課：' + location.origin + location.pathname + '#/learn/' + cid)}`,
-      `URL:${location.origin + location.pathname}#/learn/${cid}`, 'BEGIN:VALARM', 'ACTION:DISPLAY', 'TRIGGER:-PT10M', `DESCRIPTION:${escIcs(c.title)}`, 'END:VALARM', 'END:VEVENT'];
+      `URL:${location.origin + location.pathname}#/learn/${cid}`, 'BEGIN:VALARM', 'ACTION:DISPLAY', 'TRIGGER:-PT10M', `DESCRIPTION:${escIcs(c.title)}`, 'END:VALARM', 'END:VEVENT',
+      ...seriesMoves(sc).flatMap(([orig, mv]) => ['BEGIN:VEVENT', `UID:study-${cid}-${orig}@islam.onepointzeroone.org`, `DTSTAMP:${stamp}`,
+        `DTSTART:${utcStamp(mv.date, mv.time || sc.time)}`, `DTEND:${utcStamp(mv.date, addMinutes(mv.time || sc.time, sc.minutes))}`,
+        `SUMMARY:${escIcs('學習：' + c.title)}`, 'END:VEVENT'])];
   }).concat(units.flatMap(({ it, r }) => ['BEGIN:VEVENT', `UID:unit-${it.c}-${it.l}@islam.onepointzeroone.org`, `DTSTAMP:${stamp}`,
     `DTSTART:${utcStamp(it.date, it.time)}`, `DTEND:${utcStamp(it.date, addMinutes(it.time, it.minutes || 30))}`,
     `SUMMARY:${escIcs('學習：' + r.l.title)}`, `DESCRIPTION:${escIcs(r.c.title + '\n上課：' + location.origin + location.pathname + '#/learn/' + r.c.id + '/' + r.l.id)}`,
@@ -1730,7 +1752,7 @@ function editSchedule(c) {
     const onKey = (e) => { if (e.key === 'Escape') close(false); };
     const save = async (next) => {
       const prev = mySchedules[c.id];
-      if (next) mySchedules[c.id] = next; else delete mySchedules[c.id];
+      if (next) mySchedules[c.id] = prev && prev.moves ? { ...next, moves: prev.moves } : next; else delete mySchedules[c.id]; // 保留單次調整
       try { await saveSchedules(); return true; }
       catch (err) { if (prev) mySchedules[c.id] = prev; else delete mySchedules[c.id]; toast('儲存失敗：' + (err.code || err.message) + '（請確認已部署最新的 Firestore 規則）'); return false; }
     };
@@ -1745,7 +1767,7 @@ function editSchedule(c) {
     box.onclick = async (e) => {
       if (e.target === box || e.target.id === 'sc-cancel') return close(false);
       if (e.target.id === 'sc-go') { e.preventDefault(); close(false); return go('/learn/' + c.id); }
-      if (e.target.id === 'sc-gcal') addToGoogleCalendar([gcalStudyOf(c, mySchedules[c.id])], studyGoogleUrl(c, mySchedules[c.id]), e.target);
+      if (e.target.id === 'sc-gcal') addToGoogleCalendar([gcalStudyOf(c, mySchedules[c.id]), ...gcalMovedOf(c, mySchedules[c.id])], studyGoogleUrl(c, mySchedules[c.id]), e.target);
       if (e.target.id === 'sc-ics') downloadStudyIcs(c.id);
       if (e.target.id === 'sc-del' && confirm('把這門課從每週課表移除？')) { if (await save(null)) { toast('已從課表移除'); close(true); } }
     };
@@ -2309,7 +2331,7 @@ pages.plan = async (app, ym) => {
   const hasSeries = () => Object.keys(mySchedules).some((id) => hasJoined(id) && findCourse(id));
   const hasUnits = () => mySessions.some((it) => sessionRef(it));
   const allOcc = (from, to) => [...studyOccurrences(from, to), ...sessionOccurrences(from, to)];
-  const chipAttrs = (o, day) => (o.session ? `data-sid="${o.k}"` : `data-cid="${esc(o.id)}"`) + ` data-day="${day}"`;
+  const chipAttrs = (o, day) => (o.session ? `data-sid="${o.k}"` : `data-cid="${esc(o.id)}" data-orig="${o.orig}"`) + ` data-day="${day}"`;
   const toMin = (t) => { const [h, mm] = t.split(':').map(Number); return h * 60 + mm; };
   function monthHtml() {
     const first = new Date(y, m - 1, 1), days = new Date(y, m, 0).getDate();
@@ -2321,7 +2343,7 @@ pages.plan = async (app, ym) => {
       const evs = occ.filter((o) => o.start === day);
       cells.push(`<button type="button" class="cal-cell${day === todayStr() ? ' today' : ''}${day === picked ? ' picked' : ''}${evs.length ? ' has' : ''}" data-day="${day}">` +
         `<span class="cal-d">${d}</span>` +
-        evs.slice(0, 3).map((o) => `<span class="cal-ev ev-study drag-ev${o.session ? ' ev-unit' : ''}" ${chipAttrs(o, day)} title="${esc(o.title)}${o.session ? '（' + esc(o.course) + '）' : ''}（點一下修改，可拖曳到其他天）">${o.session ? '📖 ' : ''}${esc(o.startTime)} ${esc(o.title)}</span>`).join('') +
+        evs.slice(0, 3).map((o) => `<span class="cal-ev ev-study drag-ev${o.session ? ' ev-unit' : ''}" ${chipAttrs(o, day)} title="${esc(o.title)}${o.session ? '（' + esc(o.course) + '）' : ''}（點一下修改，拖曳只移動這一次）">${o.session ? '📖 ' : ''}${o.moved ? '↪ ' : ''}${esc(o.startTime)} ${esc(o.title)}</span>`).join('') +
         (evs.length > 3 ? `<span class="cal-more">還有 ${evs.length - 3} 個</span>` : '') +
         `<span class="cal-dots">${evs.slice(0, 4).map(() => '<i class="ev-study"></i>').join('')}</span></button>`);
     }
@@ -2352,8 +2374,8 @@ pages.plan = async (app, ym) => {
         (d === todayStr() && nowMin >= lo && nowMin <= hi ? `<i class="wk-now" style="top:${(nowMin - lo) / 60 * H}px"></i>` : '') +
         occ.filter((o) => o.start === d).map((o) => {
           const s = toMin(o.startTime), e = Math.max(s + 15, toMin(o.endTime) || s + 30);
-          return `<div class="wk-ev ev-study drag-ev${o.session ? ' ev-unit' : ''}" ${chipAttrs(o, d)} style="top:${(s - lo) / 60 * H}px;height:${(e - s) / 60 * H - 2}px" title="${esc(o.title)}${o.session ? '（' + esc(o.course) + '）' : ''} ${o.startTime}–${o.endTime}（點一下修改，可拖曳調整日期和時間）">` +
-            `<b>${o.session ? '📖 ' : ''}${esc(o.title)}</b><small>${o.startTime}–${o.endTime}${o.session ? ' · ' + esc(o.course) : ''}</small></div>`;
+          return `<div class="wk-ev ev-study drag-ev${o.session ? ' ev-unit' : ''}" ${chipAttrs(o, d)} style="top:${(s - lo) / 60 * H}px;height:${(e - s) / 60 * H - 2}px" title="${esc(o.title)}${o.session ? '（' + esc(o.course) + '）' : ''} ${o.startTime}–${o.endTime}（點一下修改，拖曳只移動這一次）">` +
+            `<b>${o.session ? '📖 ' : ''}${o.moved ? '↪ ' : ''}${esc(o.title)}</b><small>${o.startTime}–${o.endTime}${o.session ? ' · ' + esc(o.course) : ''}</small></div>`;
         }).join('') + '</div>').join('') + '</div></div>';
   }
   function draw() {
@@ -2391,7 +2413,7 @@ pages.plan = async (app, ym) => {
     const chip = e.target.closest('.drag-ev');
     if (!chip || e.button > 0) return;
     const r = chip.getBoundingClientRect();
-    drag = { chip, cid: chip.dataset.cid, sid: chip.dataset.sid, from: chip.dataset.day, x: e.clientX, y: e.clientY, dy: e.clientY - r.top, moved: false, ghost: null };
+    drag = { chip, cid: chip.dataset.cid, sid: chip.dataset.sid, orig: chip.dataset.orig, from: chip.dataset.day, x: e.clientX, y: e.clientY, dy: e.clientY - r.top, moved: false, ghost: null };
   });
   app.addEventListener('pointermove', (e) => {
     if (!drag) return;
@@ -2439,23 +2461,21 @@ pages.plan = async (app, ym) => {
       catch (err) { toast('儲存失敗：' + (err.code || err.message)); }
       return draw();
     }
+    // 系列課程：只移動這一次（其他週不變）
     const sc = mySchedules[d.cid], c = findCourse(d.cid);
-    if (!sc || !c) return;
-    let time = sc.time;
-    if (col) { // 週曆：依放開的位置算時間
-      const wk = app.querySelector('.wk'), lo = +wk.dataset.lo, H = +wk.dataset.h;
-      const top = e.clientY - d.dy - col.getBoundingClientRect().top;
-      const mins = Math.max(0, Math.min(24 * 60 - 15, Math.round((lo + top / H * 60) / 15) * 15));
-      time = `${pad2(Math.floor(mins / 60))}:${pad2(mins % 60)}`;
-    }
-    const fromW = weekdayOf(d.from), toW = weekdayOf(toDay);
-    if (fromW === toW && time === sc.time) return;
-    const prev = { ...sc };
-    const days = [...new Set([...sc.days.filter((x) => x !== fromW), toW])].sort();
-    mySchedules[d.cid] = { ...sc, days, time, start: sc.start && sc.start > toDay ? toDay : sc.start };
+    if (!sc || !c || !d.orig) return;
+    const cur = (sc.moves || {})[d.orig] || { date: d.orig, time: sc.time };
+    const next = { date: toDay, time: newTime || cur.time || sc.time };
+    if (next.date === cur.date && next.time === (cur.time || sc.time)) return;
+    const prev = sc;
+    const moves = { ...(sc.moves || {}) };
+    if (next.date === d.orig && next.time === sc.time) delete moves[d.orig]; else moves[d.orig] = next; // 拖回原位就取消調整
+    // 順便清掉已經不在課表上的舊調整
+    Object.keys(moves).forEach((o) => { if (!isSeriesDay(sc, o)) delete moves[o]; });
+    mySchedules[d.cid] = { ...sc, moves };
     try {
       await saveSchedules();
-      toast(`已改成 ${scheduleText(mySchedules[d.cid])}`);
+      toast(moves[d.orig] ? `這一次改到 ${dateLabel(next.date)} ${next.time}（其他週不變）` : '已改回原本的時間');
     } catch (err) {
       mySchedules[d.cid] = prev;
       toast('儲存失敗：' + (err.code || err.message));
@@ -2493,7 +2513,7 @@ pages.plan = async (app, ym) => {
     if (e.target.id === 'week-ics') return downloadStudyIcs();
     if (e.target.id === 'gcal-all') {
       const evs = [...Object.entries(mySchedules).map(([cid, sc]) => ({ c: findCourse(cid), sc }))
-        .filter(({ c, sc }) => c && hasJoined(c.id) && (sc.days || []).length).map(({ c, sc }) => gcalStudyOf(c, sc)),
+        .filter(({ c, sc }) => c && hasJoined(c.id) && (sc.days || []).length).flatMap(({ c, sc }) => [gcalStudyOf(c, sc), ...gcalMovedOf(c, sc)]),
         ...mySessions.map((it) => ({ it, r: sessionRef(it) })).filter(({ it, r }) => r && it.date >= todayStr()).map(({ it, r }) => gcalSessionOf(it, r.c, r.l))];
       if (!evs.length) return toast('我的課表還是空的');
       addToGoogleCalendar(evs, null, e.target);
