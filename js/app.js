@@ -895,7 +895,7 @@ function gcalSessionOf(it, c, l) {
   };
 }
 // 系列課程裡單獨移動過的那幾次：從重複規則排除，另外加成單一活動
-const seriesExdate = (sc) => seriesMoves(sc).map(([orig]) => `${compact(orig)}T${sc.time.replace(':', '')}00`);
+const seriesExdate = (sc) => [...seriesMoves(sc).map(([orig]) => orig), ...(sc.skips || [])].map((d) => `${compact(d)}T${sc.time.replace(':', '')}00`);
 function gcalMovedOf(c, sc) {
   return seriesMoves(sc).map(([orig, mv]) => ({ orig, mv })).concat((sc.extras || []).filter(Boolean).map((x) => ({ orig: 'x' + x.date + x.time, mv: x }))).map(({ orig, mv }) => ({
     id: gcalId('m' + c.id + '/' + orig),
@@ -1669,7 +1669,7 @@ function setPlanClip(clip) {
 }
 
 // 系列課程的某一天是不是本來就有課（星期幾符合、在開始與結束日期之間）
-const isSeriesDay = (sc, d) => (!sc.start || d >= sc.start) && (!sc.until || d <= sc.until) &&
+const isSeriesDay = (sc, d) => (!sc.start || d >= sc.start) && (!sc.until || d <= sc.until) && !(sc.skips || []).includes(d) &&
   sc.days.includes(new Date(...(([y, m, dd]) => [y, m - 1, dd])(parseDay(d))).getDay());
 // 單次調整：sc.moves = { 原本的日期: { date, time } }（只移動那一次，不影響其他週）
 const seriesMoves = (sc) => Object.entries(sc.moves || {}).filter(([orig, mv]) => mv && isSeriesDay(sc, orig) && /^\d{4}-\d{2}-\d{2}$/.test(mv.date || ''));
@@ -1724,7 +1724,7 @@ function downloadStudyIcs(onlyId) {
     const c = findCourse(cid), d = studyFirstDay(sc);
     return ['BEGIN:VEVENT', `UID:study-${cid}@islam.onepointzeroone.org`, `DTSTAMP:${stamp}`,
       `DTSTART:${utcStamp(d, sc.time)}`, `DTEND:${utcStamp(d, addMinutes(sc.time, sc.minutes))}`, studyRule(sc),
-      ...seriesMoves(sc).map(([orig]) => `EXDATE:${utcStamp(orig, sc.time)}`),
+      ...[...seriesMoves(sc).map(([orig]) => orig), ...(sc.skips || [])].map((d) => `EXDATE:${utcStamp(d, sc.time)}`),
       `SUMMARY:${escIcs('學習：' + c.title)}`, `DESCRIPTION:${escIcs('繼續上課：' + location.origin + location.pathname + '#/learn/' + cid)}`,
       `URL:${location.origin + location.pathname}#/learn/${cid}`, 'BEGIN:VALARM', 'ACTION:DISPLAY', 'TRIGGER:-PT10M', `DESCRIPTION:${escIcs(c.title)}`, 'END:VALARM', 'END:VEVENT',
       ...seriesMoves(sc).concat((sc.extras || []).filter(Boolean).map((x) => ['x' + x.date + x.time.replace(':', ''), x])).flatMap(([orig, mv]) => ['BEGIN:VEVENT', `UID:study-${cid}-${orig}@islam.onepointzeroone.org`, `DTSTAMP:${stamp}`,
@@ -1762,7 +1762,7 @@ function editSchedule(c) {
     const onKey = (e) => { if (e.key === 'Escape') close(false); };
     const save = async (next) => {
       const prev = mySchedules[c.id];
-      if (next) mySchedules[c.id] = { ...next, ...(prev && prev.moves ? { moves: prev.moves } : {}), ...(prev && prev.extras ? { extras: prev.extras } : {}) }; else delete mySchedules[c.id]; // 保留單次調整、貼上的額外課
+      if (next) mySchedules[c.id] = { ...next, ...(prev && prev.moves ? { moves: prev.moves } : {}), ...(prev && prev.extras ? { extras: prev.extras } : {}), ...(prev && prev.skips ? { skips: prev.skips } : {}) }; else delete mySchedules[c.id]; // 保留單次調整、貼上的額外課
       try { await saveSchedules(); return true; }
       catch (err) { if (prev) mySchedules[c.id] = prev; else delete mySchedules[c.id]; toast('儲存失敗：' + (err.code || err.message) + '（請確認已部署最新的 Firestore 規則）'); return false; }
     };
@@ -2370,7 +2370,7 @@ pages.plan = async (app, ym) => {
       const evs = occ.filter((o) => o.start === day);
       cells.push(`<button type="button" class="cal-cell${day === todayStr() ? ' today' : ''}${day === picked ? ' picked' : ''}${evs.length ? ' has' : ''}" data-day="${day}">` +
         `<span class="cal-d">${d}</span>` +
-        evs.slice(0, 3).map((o) => `<span class="cal-ev ev-study drag-ev${o.session ? ' ev-unit' : ''}" ${chipAttrs(o, day)} title="${esc(o.title)}${o.session ? '（' + esc(o.course) + '）' : ''}（點一下修改，拖曳只移動這一次）">${o.session ? '📖 ' : ''}${o.moved ? '↪ ' : ''}${o.extra != null ? '＋ ' : ''}${esc(o.startTime)} ${esc(o.title)}</span>`).join('') +
+        evs.slice(0, 3).map((o) => `<span class="cal-ev ev-study drag-ev${o.session ? ' ev-unit' : ''}" ${chipAttrs(o, day)} title="${esc(o.title)}${o.session ? '（' + esc(o.course) + '）' : ''}（點一下修改，拖曳只移動這一次）">${o.session ? '📖 ' : ''}${o.moved ? '↪ ' : ''}${o.extra != null ? '＋ ' : ''}${esc(o.startTime)} ${esc(o.title)}<i class="ev-del" role="button" aria-label="刪除這一次" title="刪除這一次">✕</i></span>`).join('') +
         (evs.length > 3 ? `<span class="cal-more">還有 ${evs.length - 3} 個</span>` : '') +
         `<span class="cal-dots">${evs.slice(0, 4).map(() => '<i class="ev-study"></i>').join('')}</span></button>`);
     }
@@ -2402,7 +2402,7 @@ pages.plan = async (app, ym) => {
         occ.filter((o) => o.start === d).map((o) => {
           const s = toMin(o.startTime), e = Math.max(s + 15, toMin(o.endTime) || s + 30);
           return `<div class="wk-ev ev-study drag-ev${o.session ? ' ev-unit' : ''}" ${chipAttrs(o, d)} style="top:${(s - lo) / 60 * H}px;height:${(e - s) / 60 * H - 2}px" title="${esc(o.title)}${o.session ? '（' + esc(o.course) + '）' : ''} ${o.startTime}–${o.endTime}（點一下修改，拖曳只移動這一次）">` +
-            `<b>${o.session ? '📖 ' : ''}${o.moved ? '↪ ' : ''}${o.extra != null ? '＋ ' : ''}${esc(o.title)}</b><small>${o.startTime}–${o.endTime}${o.session ? ' · ' + esc(o.course) : ''}</small></div>`;
+            `<i class="ev-del" role="button" aria-label="刪除這一次" title="刪除這一次">✕</i><b>${o.session ? '📖 ' : ''}${o.moved ? '↪ ' : ''}${o.extra != null ? '＋ ' : ''}${esc(o.title)}</b><small>${o.startTime}–${o.endTime}${o.session ? ' · ' + esc(o.course) : ''}</small></div>`;
         }).join('') + '</div>').join('') + '</div></div>';
   }
   function draw() {
@@ -2434,6 +2434,34 @@ pages.plan = async (app, ym) => {
       (hasSeries() || hasUnits() ? '<p class="small"><button type="button" class="link small" id="week-ics">⬇ 下載日曆檔（Apple／Outlook）</button></p>' : '') +
       '</div>';
   }
+  // 日曆上的 ✕：只刪除這一次
+  async function deleteOne(chip) {
+    if (!chip) return;
+    const day = chip.dataset.day;
+    try {
+      if (chip.dataset.sid != null) {
+        const k = +chip.dataset.sid, it = mySessions[k], r = it && sessionRef(it);
+        if (!it || !confirm(`刪除 ${dateLabel(it.date)} ${it.time}「${r ? r.l.title : ''}」？`)) return;
+        await saveSessions(mySessions.filter((_, i) => i !== k));
+      } else {
+        const cid = chip.dataset.cid, sc = mySchedules[cid], c = findCourse(cid);
+        if (!sc || !c || !confirm(`刪除 ${dateLabel(day)}「${c.title}」這一次？（其他週不變）`)) return;
+        const prev = sc;
+        if (chip.dataset.extra != null) {
+          mySchedules[cid] = { ...sc, extras: (sc.extras || []).filter((_, i) => i !== +chip.dataset.extra) };
+        } else {
+          const orig = chip.dataset.orig || day;
+          const moves = { ...(sc.moves || {}) };
+          delete moves[orig];
+          mySchedules[cid] = { ...sc, moves, skips: [...new Set([...(sc.skips || []), orig])].sort().slice(-300) };
+        }
+        try { await saveSchedules(); } catch (err) { mySchedules[cid] = prev; throw err; }
+      }
+      toast('已刪除這一次');
+    } catch (err) { toast('刪除失敗：' + (err.code || err.message)); }
+    draw();
+  }
+
   // 週曆欄位上某個位置的時間（每 15 分鐘）
   const timeAt = (col, clientY) => {
     const wk = app.querySelector('.wk'), lo = +wk.dataset.lo, H = +wk.dataset.h;
@@ -2516,7 +2544,7 @@ pages.plan = async (app, ym) => {
   let drag = null, justDragged = false;
   app.addEventListener('pointerdown', (e) => {
     const chip = e.target.closest('.drag-ev');
-    if (!chip || e.button > 0) return;
+    if (!chip || e.button > 0 || e.target.closest('.ev-del')) return;
     const r = chip.getBoundingClientRect();
     drag = { chip, cid: chip.dataset.cid, sid: chip.dataset.sid, extra: chip.dataset.extra, orig: chip.dataset.orig, from: chip.dataset.day, x: e.clientX, y: e.clientY, dy: e.clientY - r.top, moved: false, ghost: null };
   });
@@ -2601,6 +2629,8 @@ pages.plan = async (app, ym) => {
 
   app.onclick = async (e) => {
     if (justDragged) return;
+    const del = e.target.closest('.ev-del');
+    if (del) { e.preventDefault(); e.stopPropagation(); return deleteOne(del.closest('.drag-ev')); }
     const chip = e.target.closest('.drag-ev');
     if (chip) {
       e.preventDefault();

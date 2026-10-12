@@ -592,3 +592,10 @@ table.orders th { font-size: 12px; color: var(--muted); background: var(--soft);
 .side-check { position: relative; }
 .side-check[data-count]:not([data-count=""])::after { content: attr(data-count); position: absolute; top: 4px; right: 3px; min-width: 15px; height: 15px; padding: 0 3px; border-radius: 999px; background: #ec4899; color: #fff; font-size: 10px; font-weight: 700; line-height: 15px; text-align: center; }
 .already { background: var(--grid); border-radius: 8px; padding: 8px 10px; margin: 0 0 10px; }
+/* 我的課表：課程右上角的 ✕（刪除這一次） */
+.drag-ev { position: relative; }
+.ev-del { position: absolute; top: 1px; right: 2px; width: 16px; height: 16px; border-radius: 50%; display: grid; place-items: center; font-style: normal; font-size: 10px; line-height: 1; color: #fff; background: #be185d; cursor: pointer; opacity: 0; transition: opacity .15s; z-index: 2; }
+.cal-ev.drag-ev { padding-right: 20px; }
+.drag-ev:hover .ev-del, .drag-ev:focus-within .ev-del { opacity: 1; }
+.ev-del:hover { background: #9d174d; transform: scale(1.1); }
+@media (hover: none) { .ev-del { opacity: .85; } }
