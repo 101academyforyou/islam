@@ -1998,14 +1998,18 @@ pages.admin = async (app, id, query, sub) => {
     (coursesFromDb ? '' :
       '<div class="card pad notice-card"><strong>第一次使用：請先匯入課程</strong><p class="muted small">目前的課程資料來自網站內建檔案。按下面的按鈕把課程匯入資料庫後，就能在網站上直接編輯。</p>' +
       '<button class="btn btn-sm" id="import">匯入現有課程到資料庫</button></div>') +
-    '<div class="admin-list">' + courses.map((c, i) =>
-      `<div class="card admin-row">${thumb(c)}<div class="pad"><strong>${esc(c.title)}</strong>` +
-      `<p class="muted small">${esc(c.category || '')} · ${lessonsOf(c).length} 個單元 · ${c.published === false ? '<span class="tag">未上架</span>' : '已上架'}` +
+    (coursesFromDb && courses.length > 1 ? '<p class="muted small">按住 ⠿ 拖曳可以調整課程順序（= 學習地圖的階段順序），放開後自動儲存；也可以按 ↑ ↓。</p>' : '') +
+    `<div class="admin-list${coursesFromDb ? ' sortable' : ''}">` + courses.map((c, i) =>
+      `<div class="card admin-row" data-id="${esc(c.id)}">` +
+      (coursesFromDb ? `<div class="admin-drag"><span class="drag-handle" title="拖曳調整順序" aria-label="拖曳">⠿</span><span class="admin-no">${i + 1}</span></div>` : '') +
+      `${thumb(c)}<div class="pad"><strong>${esc(c.title)}</strong>` +
+      `<p class="muted small">${[esc(c.category || ''), lessonsOf(c).length + ' 個單元', c.published === false ? '<span class="tag">未上架</span>' : '已上架'].filter(Boolean).join(' · ')}` +
       (c.unlisted ? ' · <span class="tag">不公開</span>' : '') +
       '</p>' +
       `<div class="lesson-nav">${coursesFromDb ? `<a class="btn btn-sm" href="#/admin/${c.id}">編輯</a>` : ''}` +
       `<a class="btn btn-ghost btn-sm" href="#/course/${c.id}">查看</a>` +
       (coursesFromDb && i > 0 ? `<button class="btn btn-ghost btn-sm" data-up="${i}">↑ 往前</button>` : '') +
+      (coursesFromDb && i < courses.length - 1 ? `<button class="btn btn-ghost btn-sm" data-down="${i}">↓ 往後</button>` : '') +
       '</div></div></div>').join('') + '</div></div>';
 
   const imp = app.querySelector('#import');
@@ -2020,16 +2024,62 @@ pages.admin = async (app, id, query, sub) => {
       pages.admin(app);
     } catch (e) { console.error(e); imp.disabled = false; imp.textContent = '匯入現有課程到資料庫'; toast('匯入失敗：' + (e.code || e.message) + '（請確認已更新 Firestore 規則）'); }
   };
-  app.onclick = async (e) => {
-    const up = e.target.dataset && e.target.dataset.up;
-    if (up == null) return;
-    const i = +up;
-    [courses[i - 1], courses[i]] = [courses[i], courses[i - 1]];
+  // 依新的順序儲存（只寫入順序有變的課程）
+  const saveOrder = async (ids) => {
+    const byId = Object.fromEntries(courses.map((c) => [c.id, c]));
+    const next = ids.map((id) => byId[id]).filter(Boolean);
+    const changed = next.filter((c, k) => c.order !== k);
+    next.forEach((c, k) => { c.order = k; });
+    courses = next;
     try {
-      await Promise.all(courses.map((c, k) => fb.setDoc(fb.doc(db, COL.courses, c.id), { order: k }, { merge: true })));
-      pages.admin(app);
+      await Promise.all(changed.map((c) => fb.setDoc(fb.doc(db, COL.courses, c.id), { order: c.order }, { merge: true })));
+      if (changed.length) toast('已更新課程順序');
     } catch (err) { toast('排序失敗：' + (err.code || err.message)); }
+    pages.admin(app);
   };
+  app.onclick = async (e) => {
+    const b = e.target.closest('[data-up],[data-down]');
+    if (!b) return;
+    const ids = courses.map((c) => c.id);
+    const i = +(b.dataset.up ?? b.dataset.down), j = b.dataset.up != null ? i - 1 : i + 1;
+    [ids[i], ids[j]] = [ids[j], ids[i]];
+    saveOrder(ids);
+  };
+  // 拖曳排序
+  const list = app.querySelector('.admin-list.sortable');
+  if (!list) return;
+  let dragging = null, startIds = '';
+  list.addEventListener('pointerdown', (e) => {
+    const h = e.target.closest('.drag-handle');
+    if (!h) return;
+    e.preventDefault();
+    dragging = h.closest('.admin-row');
+    startIds = [...list.children].map((x) => x.dataset.id).join();
+    dragging.classList.add('dragging');
+    h.setPointerCapture(e.pointerId);
+  });
+  list.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    const over = document.elementFromPoint(e.clientX, e.clientY);
+    const target = over && over.closest('.admin-row');
+    if (!target || target === dragging || !list.contains(target)) {
+      // 拖到畫面邊緣時自動捲動
+      if (e.clientY < 70) scrollBy(0, -12); else if (e.clientY > innerHeight - 50) scrollBy(0, 12);
+      return;
+    }
+    const r = target.getBoundingClientRect();
+    if (e.clientY > r.top + r.height / 2) target.after(dragging); else target.before(dragging);
+    [...list.children].forEach((row, k) => { const n = row.querySelector('.admin-no'); if (n) n.textContent = k + 1; });
+  });
+  const end = () => {
+    if (!dragging) return;
+    dragging.classList.remove('dragging');
+    dragging = null;
+    const ids = [...list.children].map((x) => x.dataset.id);
+    if (ids.join() !== startIds) saveOrder(ids);
+  };
+  list.addEventListener('pointerup', end);
+  list.addEventListener('pointercancel', end);
 };
 
 const adminTabs = (cur) => '<div class="chips admin-tabs">' +
