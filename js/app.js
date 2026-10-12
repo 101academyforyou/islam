@@ -7,7 +7,7 @@
  * 安全規則在 1.01academy repo 的 firestore.rules。
  */
 // 這個網站的 Firestore 集合名稱
-const COL = { courses: 'islam_courses', videos: 'islam_courseVideos', enroll: 'islam_enroll', prefs: 'islam_prefs', students: 'islam_students', notes: 'islam_notes', posts: 'islam_posts', counts: 'islam_counts', counted: 'islam_counted', stats: 'islam_stats', articles: 'islam_articles', blog: 'islam_blog', media: 'islam_media' };
+const COL = { courses: 'islam_courses', videos: 'islam_courseVideos', enroll: 'islam_enroll', prefs: 'islam_prefs', students: 'islam_students', notes: 'islam_notes', posts: 'islam_posts', counts: 'islam_counts', counted: 'islam_counted', stats: 'islam_stats', articles: 'islam_articles', blog: 'islam_blog', media: 'islam_media', events: 'islam_events' };
 const FIREBASE = 'https://www.gstatic.com/firebasejs/10.12.2/';
 const CONFIG = window.SITE_CONFIG || {};
 const configured = !!(CONFIG.firebaseConfig && CONFIG.firebaseConfig.apiKey);
@@ -447,7 +447,7 @@ function renderHeader() {
     // 標誌：往上的階梯（循序漸進）
     `<a href="#/" class="logo"><span class="logo-mark" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18"><path fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" d="M4 19h5v-5h5V9h5V5"/></svg></span>${esc(CONFIG.siteName || '循序漸進學伊斯蘭')}</a>` +
     '<nav>' +
-    '<a href="#/">學習地圖</a><a href="#/articles">文章</a>' +
+    '<a href="#/">學習地圖</a><a href="#/articles">文章</a><a href="#/calendar">行事曆</a>' +
     (user
       ? `<a href="#/my">我的學習區</a>${isAdmin() ? '<a href="#/admin">管理</a>' : ''}<a class="muted small user-name" href="#/account" title="帳號設定（${esc(user.email)}）">${esc(name)}</a><button class="link" id="logout">登出</button>`
       : '<a href="#/login" class="btn btn-sm">登入</a>') +
@@ -508,6 +508,7 @@ pages.home = (app) => {
     '<div class="path" id="list"></div>' +
     (hidden.length ? '<h3 class="muted">不公開的課程（只有管理者看得到這個列表）</h3><div class="path">' + hidden.map((c) => row(c, 0)).join('') + '</div>' : '') +
     '</section>' +
+    '<section class="container" id="home-events" hidden></section>' +
     '<section class="container" id="home-blog" hidden></section>' +
     '<section class="container home-faq"><h2>常見問題</h2>' + faqList(SITE_PAGES.faq.slice(0, 5)) +
     '<p><a class="link" href="#/faq">查看全部常見問題 →</a></p></section>';
@@ -532,6 +533,15 @@ pages.home = (app) => {
     if (e.target.closest('[data-stop]')) { e.preventDefault(); go('/login?next=/'); }
   };
   draw();
+  // 近期活動（今天以後的前 3 個）
+  loadEvents().then((list) => {
+    const box = app.querySelector('#home-events');
+    const next = upcomingEvents(list).slice(0, 3);
+    if (!box || !next.length) return;
+    box.innerHTML = '<div class="row-between"><h2>近期活動</h2><a class="link" href="#/calendar">查看行事曆 →</a></div>' +
+      '<div class="event-list">' + next.map(eventRow).join('') + '</div>';
+    box.hidden = false;
+  });
   // 最新文章（有發布的文章才顯示）
   loadBlog().then((list) => {
     const box = app.querySelector('#home-blog');
@@ -619,6 +629,267 @@ pages.article = async (app, id) => {
     (a.cover ? `<img class="blog-cover" src="${esc(a.cover)}" alt="${esc(a.title)}">` : '') +
     `<div class="lesson-article">${articleHtml({ text: a.text, url: a.url })}</div>` +
     '<p class="center"><a class="btn btn-ghost btn-sm" href="#/articles">← 回到全部文章</a></p></div>';
+};
+
+/* ---------------- 行事曆（課程與活動） ----------------
+ * islam_events/{活動id} = { title, type, start: 'YYYY-MM-DD', end, allDay, startTime: 'HH:MM', endTime, location, url, courseId, description, published, createdAt, updatedAt }
+ * 已發布的活動任何人都看得到；草稿只有管理者看得到 */
+const EVENT_TYPES = ['課程', '講座', '活動', '節日', '其他'];
+const typeClass = (t) => 'ev-' + Math.max(0, EVENT_TYPES.indexOf(t));
+let eventCache = null, eventFor = null;
+async function loadEvents(force = false) {
+  const who = isAdmin() ? 'admin' : 'public';
+  if (!force && eventCache && eventFor === who) return eventCache;
+  try {
+    const col = fb.collection(db, COL.events);
+    const snap = await fb.getDocs(isAdmin() ? col : fb.query(col, fb.where('published', '==', true)));
+    eventCache = snap.docs.map((d) => ({ ...d.data(), id: d.id }))
+      .filter((e) => (e.published || isAdmin()) && /^\d{4}-\d{2}-\d{2}$/.test(e.start || ''))
+      .sort((x, y) => (x.start + (x.allDay ? '' : x.startTime || '')).localeCompare(y.start + (y.allDay ? '' : y.startTime || '')));
+    eventFor = who;
+  } catch (e) {
+    console.error(e);
+    eventCache = eventCache || [];
+  }
+  return eventCache;
+}
+const ymd = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+const todayStr = () => ymd(new Date());
+const endOf = (e) => (e.end && e.end >= e.start ? e.end : e.start);
+const eventsOn = (list, day) => list.filter((e) => e.start <= day && endOf(e) >= day);
+const upcomingEvents = (list) => list.filter((e) => e.published && endOf(e) >= todayStr());
+const WEEK = ['日', '一', '二', '三', '四', '五', '六'];
+const dateLabel = (s) => { const [y, m, d] = s.split('-').map(Number); const w = new Date(y, m - 1, d).getDay(); return `${m}/${d}（${WEEK[w]}）`; };
+function whenText(e) {
+  const span = endOf(e) !== e.start ? `${dateLabel(e.start)} – ${dateLabel(endOf(e))}` : dateLabel(e.start);
+  const time = e.allDay || !e.startTime ? '' : ` ${e.startTime}${e.endTime ? '–' + e.endTime : ''}`;
+  return span + time;
+}
+const eventRow = (e) => {
+  const [, m, d] = e.start.split('-').map(Number);
+  const c = e.courseId ? findCourse(e.courseId) : null;
+  return `<a class="card event-row" href="#/event/${e.id}"><span class="ev-date ${typeClass(e.type)}"><b>${d}</b><small>${m} 月</small></span>` +
+    `<span class="ev-main"><span class="tag">${[e.type, e.published ? '' : '草稿'].filter(Boolean).map(esc).join(' · ')}</span>` +
+    `<strong dir="auto">${esc(e.title)}</strong>` +
+    `<span class="muted small">${esc(whenText(e))}${e.location ? ' · ' + esc(e.location) : ''}${c ? ' · 課程：' + esc(c.title) : ''}</span></span></a>`;
+};
+// 加入 Google 日曆、下載 .ics（Apple／Outlook）
+const compact = (s) => s.replace(/-/g, '');
+const plusDay = (s) => { const [y, m, d] = s.split('-').map(Number); return ymd(new Date(y, m - 1, d + 1)); };
+function googleCalUrl(e) {
+  const dates = e.allDay || !e.startTime
+    ? `${compact(e.start)}/${compact(plusDay(endOf(e)))}`
+    : `${compact(e.start)}T${e.startTime.replace(':', '')}00/${compact(endOf(e))}T${(e.endTime || e.startTime).replace(':', '')}00`;
+  const details = [plainText(e.description).slice(0, 1200), e.url, location.origin + location.pathname + '#/event/' + e.id].filter(Boolean).join('\n\n');
+  return 'https://calendar.google.com/calendar/render?action=TEMPLATE&ctz=Asia%2FTaipei' +
+    `&text=${encodeURIComponent(e.title)}&dates=${dates}&details=${encodeURIComponent(details)}&location=${encodeURIComponent(e.location || e.url || '')}`;
+}
+// 台灣時間（UTC+8，沒有日光節約）轉成 UTC，日曆 App 都能正確顯示
+const utcStamp = (day, time) => { const [y, m, d] = day.split('-').map(Number); const [hh, mm] = time.split(':').map(Number); return new Date(Date.UTC(y, m - 1, d, hh - 8, mm)).toISOString().replace(/[-:]/g, '').slice(0, 15) + 'Z'; };
+// 說明文字去掉格式符號（給 Google 日曆、.ics 用）
+const plainText = (t) => String(t || '').replace(/!\[[^\]]*\]\([^)]*\)/g, '').replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1 $2').replace(/\*\*(.+?)\*\*/g, '$1').replace(/^#{1,3}\s+|^>\s?/gm, '').replace(/\n{3,}/g, '\n\n').trim();
+function downloadIcs(e) {
+  const escIcs = (t) => String(t || '').replace(/\\/g, '\\\\').replace(/[,;]/g, (m) => '\\' + m).replace(/\r?\n/g, '\\n');
+  const when = e.allDay || !e.startTime
+    ? [`DTSTART;VALUE=DATE:${compact(e.start)}`, `DTEND;VALUE=DATE:${compact(plusDay(endOf(e)))}`]
+    : [`DTSTART:${utcStamp(e.start, e.startTime)}`, `DTEND:${utcStamp(endOf(e), e.endTime || e.startTime)}`];
+  const ics = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//islam.onepointzeroone.org//calendar//ZH', 'BEGIN:VEVENT',
+    `UID:${e.id}@islam.onepointzeroone.org`, `DTSTAMP:${new Date().toISOString().replace(/[-:]/g, '').slice(0, 15)}Z`, ...when,
+    `SUMMARY:${escIcs(e.title)}`, e.location ? `LOCATION:${escIcs(e.location)}` : '',
+    `DESCRIPTION:${escIcs([plainText(e.description), e.url].filter(Boolean).join('\n\n'))}`,
+    `URL:${location.origin + location.pathname}#/event/${e.id}`, 'END:VEVENT', 'END:VCALENDAR'].filter(Boolean).join('\r\n');
+  downloadFile(`event-${e.start}.ics`, ics, 'text/calendar');
+}
+
+pages.calendar = async (app, ym) => {
+  app.innerHTML = '<div class="container"><p class="muted">載入行事曆中…</p></div>';
+  const list = await loadEvents();
+  if (!document.body.contains(app)) return;
+  const now = new Date();
+  let [y, m] = /^\d{4}-\d{2}$/.test(ym || '') ? ym.split('-').map(Number) : [now.getFullYear(), now.getMonth() + 1];
+  let picked = '';
+  let type = '';
+  function draw() {
+    const first = new Date(y, m - 1, 1), days = new Date(y, m, 0).getDate();
+    const shownList = list.filter((e) => !type || e.type === type);
+    const cells = [];
+    for (let i = 0; i < first.getDay(); i++) cells.push('<div class="cal-cell blank"></div>');
+    for (let d = 1; d <= days; d++) {
+      const day = `${y}-${pad2(m)}-${pad2(d)}`;
+      const evs = eventsOn(shownList, day);
+      cells.push(`<button type="button" class="cal-cell${day === todayStr() ? ' today' : ''}${day === picked ? ' picked' : ''}${evs.length ? ' has' : ''}" data-day="${day}">` +
+        `<span class="cal-d">${d}</span>` +
+        evs.slice(0, 3).map((e) => `<span class="cal-ev ${typeClass(e.type)}" title="${esc(e.title)}">${e.allDay || !e.startTime || e.start !== day ? '' : esc(e.startTime) + ' '}${esc(e.title)}</span>`).join('') +
+        (evs.length > 3 ? `<span class="cal-more">還有 ${evs.length - 3} 個</span>` : '') +
+        `<span class="cal-dots">${evs.slice(0, 4).map((e) => `<i class="${typeClass(e.type)}"></i>`).join('')}</span></button>`);
+    }
+    const monthEvents = shownList.filter((e) => e.start <= `${y}-${pad2(m)}-${pad2(days)}` && endOf(e) >= `${y}-${pad2(m)}-01`);
+    const dayEvents = picked ? eventsOn(shownList, picked) : null;
+    const types = EVENT_TYPES.filter((t) => list.some((e) => e.type === t));
+    app.innerHTML = '<div class="container calendar">' +
+      '<div class="row-between"><h1>行事曆</h1>' + (isAdmin() ? '<a class="btn btn-sm" href="#/admin/event/new">＋ 新增活動</a>' : '') + '</div>' +
+      '<div class="cal-head"><button type="button" class="btn btn-ghost btn-sm" data-nav="-1" aria-label="上個月">‹</button>' +
+      `<h2>${y} 年 ${m} 月</h2><button type="button" class="btn btn-ghost btn-sm" data-nav="1" aria-label="下個月">›</button>` +
+      '<button type="button" class="btn btn-ghost btn-sm" data-nav="0">今天</button>' +
+      (types.length > 1 ? '<span class="chips cal-types"><button class="chip" data-type="">全部</button>' + types.map((t) => `<button class="chip" data-type="${esc(t)}"><i class="dot-sw ${typeClass(t)}"></i>${esc(t)}</button>`).join('') + '</span>' : '') +
+      '</div>' +
+      '<div class="cal-grid">' + WEEK.map((w) => `<div class="cal-w">${w}</div>`).join('') + cells.join('') + '</div>' +
+      (dayEvents
+        ? `<h3>${esc(dateLabel(picked))}</h3>` + (dayEvents.length ? '<div class="event-list">' + dayEvents.map(eventRow).join('') + '</div>' : '<p class="muted">這一天沒有活動。</p>')
+        : `<h3>${m} 月的活動</h3>` + (monthEvents.length ? '<div class="event-list">' + monthEvents.map(eventRow).join('') + '</div>' : '<p class="muted">這個月還沒有活動。</p>')) +
+      '</div>';
+    app.querySelectorAll('[data-type]').forEach((b) => b.classList.toggle('active', b.dataset.type === type));
+  }
+  app.onclick = (e) => {
+    const nav = e.target.closest('[data-nav]');
+    if (nav) {
+      const n = +nav.dataset.nav;
+      if (n === 0) { y = now.getFullYear(); m = now.getMonth() + 1; picked = ''; }
+      else { m += n; if (m < 1) { m = 12; y--; } if (m > 12) { m = 1; y++; } picked = ''; }
+      history.replaceState(null, '', `#/calendar/${y}-${pad2(m)}`);
+      return draw();
+    }
+    const cell = e.target.closest('[data-day]');
+    if (cell) { picked = picked === cell.dataset.day ? '' : cell.dataset.day; return draw(); }
+    const t = e.target.closest('[data-type]');
+    if (t) { type = t.dataset.type; draw(); }
+  };
+  draw();
+};
+
+pages.event = async (app, id) => {
+  app.innerHTML = '<div class="container"><p class="muted">載入中…</p></div>';
+  await loadEvents();
+  let e = (eventCache || []).find((x) => x.id === id);
+  if (!e) { try { const snap = await fb.getDoc(fb.doc(db, COL.events, id)); if (snap.exists()) e = { ...snap.data(), id }; } catch (err) { /* 草稿或不存在 */ } }
+  if (!document.body.contains(app)) return;
+  if (!e || (!e.published && !isAdmin())) return notFound(app);
+  const c = e.courseId ? findCourse(e.courseId) : null;
+  app.innerHTML = '<div class="container narrow blog-page event-page">' +
+    `<a href="#/calendar/${e.start.slice(0, 7)}" class="muted small">← 行事曆</a>` +
+    (isAdmin() ? ` · <a href="#/admin/event/${e.id}" class="link small">✎ 編輯此活動</a>` + (e.published ? '' : ' <span class="tag">（草稿）</span>') : '') +
+    `<p class="tag"><i class="dot-sw ${typeClass(e.type)}"></i>${esc(e.type || '活動')}</p><h1 dir="auto">${esc(e.title)}</h1>` +
+    '<div class="card pad event-facts">' +
+    `<p><strong>時間</strong><span>${esc(whenText(e))}${e.allDay || !e.startTime ? '（全天）' : ''}</span></p>` +
+    (e.location ? `<p><strong>地點</strong><span dir="auto">${esc(e.location)}</span></p>` : '') +
+    (e.url ? `<p><strong>連結</strong><span><a class="link" href="${esc(e.url)}" target="_blank" rel="noopener">${esc(e.url)}</a></span></p>` : '') +
+    (c ? `<p><strong>課程</strong><span><a class="link" href="#/course/${c.id}">${esc(c.title)} →</a></span></p>` : '') +
+    `<div class="lesson-nav"><a class="btn btn-sm" href="${esc(googleCalUrl(e))}" target="_blank" rel="noopener">＋ 加入 Google 日曆</a>` +
+    '<button type="button" class="btn btn-ghost btn-sm" id="ics">⬇ 下載行事曆檔（Apple／Outlook）</button></div></div>' +
+    (e.description ? `<div class="article">${renderArticle(e.description)}</div>` : '') + '</div>';
+  app.querySelector('#ics').onclick = () => downloadIcs(e);
+};
+
+// 行事曆管理（管理者）
+pages.eventAdmin = async (app) => {
+  app.innerHTML = '<div class="container"><p class="muted">載入中…</p></div>';
+  const list = await loadEvents(true);
+  if (!document.body.contains(app)) return;
+  const today = todayStr();
+  const future = list.filter((e) => endOf(e) >= today), past = list.filter((e) => endOf(e) < today).reverse();
+  app.innerHTML = '<div class="container">' + adminTabs('events') +
+    '<div class="row-between"><h1>行事曆</h1><span class="lesson-nav"><a class="btn btn-ghost btn-sm" href="#/calendar">查看行事曆</a><a class="btn btn-sm" href="#/admin/event/new">＋ 新增活動</a></span></div>' +
+    '<p class="muted small">課程開課、講座、活動、節日都可以加到行事曆。已發布的活動顯示在網站上方的「行事曆」頁，首頁也會列出最近 3 個。</p>' +
+    '<h3>即將舉行</h3>' + (future.length ? '<div class="event-list">' + future.map(eventRow).join('') + '</div>' : '<p class="muted">沒有即將舉行的活動，按「＋ 新增活動」新增。</p>') +
+    (past.length ? '<h3>已結束</h3><div class="event-list past">' + past.map(eventRow).join('') + '</div>' : '') + '</div>';
+  // 管理頁點活動直接進編輯
+  app.querySelectorAll('.event-row').forEach((a) => { a.href = a.getAttribute('href').replace('#/event/', '#/admin/event/'); });
+};
+
+pages.eventEdit = async (app, id, query = {}) => {
+  const isNew = !id || id === 'new';
+  await loadEvents(true);
+  const src = isNew ? null : eventCache.find((x) => x.id === id);
+  if (!isNew && !src) return notFound(app);
+  if (!document.body.contains(app)) return;
+  const blank = { title: '', type: query.course ? '課程' : '活動', start: query.date || todayStr(), end: '', allDay: false, startTime: '', endTime: '', location: '', url: '', courseId: query.course || '', description: '', published: false };
+  const e = isNew ? { ...blank, id: newId('e'), createdAt: Date.now() } : { ...blank, ...src };
+  const field = (label, name, val, attrs = '') => `<label>${label}<input class="input" name="${name}" value="${esc(val)}" ${attrs}/></label>`;
+  function draw() {
+    app.innerHTML = `<div class="container editor"><a href="#/admin/events" class="muted small">← 行事曆管理</a><h1>${isNew ? '新增活動' : '編輯活動'}</h1>` +
+      '<form id="ee" novalidate><div class="card pad">' +
+      field('標題', 'title', e.title, 'required maxlength="200" placeholder="例如：開齋節聚會、新課程開課"') +
+      `<label>類型<select class="input" name="type">${EVENT_TYPES.map((t) => `<option ${t === e.type ? 'selected' : ''}>${t}</option>`).join('')}</select></label>` +
+      `<label>相關課程 <span class="muted small">可留空；選了之後活動頁會連到這門課</span><select class="input" name="courseId"><option value="">（無）</option>` +
+      courses.map((c) => `<option value="${esc(c.id)}" ${c.id === e.courseId ? 'selected' : ''}>${esc(c.title)}</option>`).join('') + '</select></label>' +
+      '<div class="two">' + field('開始日期', 'start', e.start, 'type="date" required') + field('結束日期 <span class="muted small">一天的活動可留空</span>', 'end', e.end, 'type="date"') + '</div>' +
+      `<label class="check"><input type="checkbox" name="allDay" ${e.allDay ? 'checked' : ''}/> 全天活動</label>` +
+      `<div class="two" id="times" ${e.allDay ? 'hidden' : ''}>` + field('開始時間', 'startTime', e.startTime, 'type="time"') + field('結束時間', 'endTime', e.endTime, 'type="time"') + '</div>' +
+      field('地點 <span class="muted small">可留空</span>', 'location', e.location, 'maxlength="200"') +
+      field('連結 <span class="muted small">可留空，例如報名表、直播網址</span>', 'url', e.url, 'placeholder="https://…"') +
+      `<label class="check"><input type="checkbox" name="published" ${e.published ? 'checked' : ''}/> 發布（取消勾選則是草稿，只有管理者看得到）</label></div>` +
+      '<div class="card pad"><h3>活動說明 <span class="muted small">可留空</span></h3>' + mediaButton('description') +
+      `<textarea class="input textarea" name="description" rows="8" placeholder="活動內容、注意事項…">${esc(e.description)}</textarea>` +
+      `<details class="article-preview" id="epv" ${e.description ? '' : 'hidden'} open><summary class="small">預覽</summary><div class="article">${renderArticle(e.description)}</div></details></div>` +
+      '<div class="editor-actions"><span class="autosave muted small" id="autosave">修改後會自動儲存</span>' +
+      '<button class="btn" id="save">完成，查看活動 →</button>' +
+      '<button type="button" class="btn btn-ghost" id="del">刪除活動</button></div></form></div>';
+  }
+  function collect() {
+    const f = app.querySelector('#ee');
+    if (!f) return;
+    ['title', 'type', 'courseId', 'start', 'end', 'startTime', 'endTime', 'location', 'url'].forEach((k) => { e[k] = f[k].value.trim(); });
+    e.allDay = f.allDay.checked;
+    e.published = f.published.checked;
+    e.description = f.description.value.replace(/\s+$/, '');
+  }
+  let timer = 0, chain = Promise.resolve(), created = !isNew;
+  const setStatus = (t, warn = false) => { const el = app.querySelector('#autosave'); if (el) { el.textContent = t; el.classList.toggle('expired', warn); } };
+  function autosave(delay) { clearTimeout(timer); setStatus('編輯中…'); timer = setTimeout(() => { saveNow(); }, delay); }
+  function saveNow() {
+    clearTimeout(timer); timer = 0;
+    collect();
+    const problem = !e.title ? '請輸入標題，才會自動儲存'
+      : !/^\d{4}-\d{2}-\d{2}$/.test(e.start) ? '請選擇開始日期'
+      : e.end && e.end < e.start ? '結束日期不能早於開始日期'
+      : !e.allDay && e.startTime && e.endTime && e.endTime < e.startTime && (!e.end || e.end === e.start) ? '結束時間不能早於開始時間'
+      : e.url && !/^https?:\/\/\S+$/i.test(e.url) ? '連結要以 https:// 開頭' : '';
+    if (problem) { setStatus('⚠ ' + problem, true); return Promise.resolve(false); }
+    const data = { title: e.title, type: e.type, start: e.start, end: e.end && e.end !== e.start ? e.end : '', allDay: e.allDay, startTime: e.allDay ? '' : e.startTime, endTime: e.allDay ? '' : e.endTime,
+      location: e.location, url: e.url, courseId: e.courseId, description: e.description, published: e.published, createdAt: e.createdAt || Date.now(), updatedAt: Date.now() };
+    setStatus('儲存中…');
+    chain = chain.then(async () => {
+      await fb.setDoc(fb.doc(db, COL.events, e.id), data);
+      if (eventCache) { const i = eventCache.findIndex((x) => x.id === e.id); if (i > -1) eventCache[i] = { ...data, id: e.id }; else eventCache.push({ ...data, id: e.id }); }
+      if (!created) { created = true; history.replaceState(null, '', '#/admin/event/' + e.id); }
+      setStatus(`✓ 已自動儲存（${fmtTime(Date.now()).slice(-5)}）`);
+      return true;
+    }).catch((err) => { console.error(err); setStatus('⚠ 儲存失敗：' + (err.code || err.message), true); return false; });
+    return chain;
+  }
+  function bind() {
+    const f = app.querySelector('#ee');
+    f.addEventListener('input', (ev) => {
+      if (ev.target.name === 'description') {
+        const pv = app.querySelector('#epv');
+        pv.hidden = !ev.target.value.trim();
+        pv.querySelector('.article').innerHTML = renderArticle(ev.target.value);
+      }
+      autosave(1000);
+    });
+    f.addEventListener('change', (ev) => {
+      if (ev.target.name === 'allDay') app.querySelector('#times').hidden = ev.target.checked;
+      // 選了課程而標題還空著：用課程名稱當標題
+      if (ev.target.name === 'courseId' && ev.target.value && !f.title.value.trim()) { const c = findCourse(ev.target.value); if (c) f.title.value = c.title; }
+      autosave(300);
+    });
+    bindMediaButtons(app);
+    app.querySelector('#del').onclick = async () => {
+      if (!confirm(`確定刪除「${e.title || '這個活動'}」？此動作無法復原。`)) return;
+      clearTimeout(timer); timer = 0;
+      try {
+        await chain;
+        await fb.deleteDoc(fb.doc(db, COL.events, e.id));
+        if (eventCache) eventCache = eventCache.filter((x) => x.id !== e.id);
+        toast('活動已刪除');
+        go('/admin/events');
+      } catch (err) { toast('刪除失敗：' + (err.code || err.message)); }
+    };
+    f.onsubmit = async (ev) => { ev.preventDefault(); if (await saveNow()) go('/event/' + e.id); };
+  }
+  window.addEventListener('hashchange', () => { if (timer) saveNow(); }, { once: true });
+  draw();
+  bind();
 };
 
 // 文章管理（管理者）
@@ -1463,10 +1734,12 @@ pages.admin = async (app, id, query, sub) => {
   if (id === 'students') return pages.students(app);
   if (id === 'playlist') return pages.playlist(app);
   if (id === 'articles') return pages.blogAdmin(app);
+  if (id === 'events') return pages.eventAdmin(app);
+  if (id === 'event') return pages.eventEdit(app, sub, query);
   if (id === 'article') return pages.blogEdit(app, sub);
   if (id) return pages.edit(app, id);
   app.innerHTML = '<div class="container">' + adminTabs('courses') + '<div class="row-between"><h1>課程管理</h1><span class="lesson-nav">' +
-    '<a class="btn btn-ghost btn-sm" href="#/admin/playlist">▶ 從播放清單建立</a><a class="btn btn-sm" href="#/admin/new">＋ 新增課程</a><a class="btn btn-sm" href="#/admin/article/new">＋ 新增文章</a></span></div>' +
+    '<a class="btn btn-ghost btn-sm" href="#/admin/playlist">▶ 從播放清單建立</a><a class="btn btn-sm" href="#/admin/new">＋ 新增課程</a><a class="btn btn-sm" href="#/admin/article/new">＋ 新增文章</a><a class="btn btn-sm" href="#/admin/event/new">＋ 新增活動</a></span></div>' +
     (coursesFromDb ? '' :
       '<div class="card pad notice-card"><strong>第一次使用：請先匯入課程</strong><p class="muted small">目前的課程資料來自網站內建檔案。按下面的按鈕把課程匯入資料庫後，就能在網站上直接編輯。</p>' +
       '<button class="btn btn-sm" id="import">匯入現有課程到資料庫</button></div>') +
@@ -1507,6 +1780,7 @@ pages.admin = async (app, id, query, sub) => {
 const adminTabs = (cur) => '<div class="chips admin-tabs">' +
   `<a class="chip${cur === 'courses' ? ' active' : ''}" href="#/admin">課程管理（順序 = 學習地圖的階段）</a>` +
   `<a class="chip${cur === 'articles' ? ' active' : ''}" href="#/admin/articles">文章管理</a>` +
+  `<a class="chip${cur === 'events' ? ' active' : ''}" href="#/admin/events">行事曆</a>` +
   `<a class="chip${cur === 'students' ? ' active' : ''}" href="#/admin/students">學生名單</a></div>`;
 
 /* ---------------- 從 YouTube 播放清單建立課程（管理者） ----------------
