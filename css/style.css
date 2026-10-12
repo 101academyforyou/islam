@@ -585,3 +585,10 @@ table.orders th { font-size: 12px; color: var(--muted); background: var(--soft);
 .side-check:hover::before { border-color: #8b5cf6; }
 .side-check[aria-pressed="true"]::before { content: '✓'; color: #fff; font-size: 13px; font-weight: 800; line-height: 18px; text-align: center; background: #8b5cf6; border-color: #8b5cf6; }
 .side-row:has(.side-l.active), .side-row:hover { background: var(--soft); } .side-row .side-l:hover { background: transparent; }
+/* 我的課表：複製貼上 */
+.clip-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 8px 12px; margin: 0 0 10px; border-radius: 10px; background: color-mix(in srgb, #ec4899 12%, var(--card)); border: 1px dashed #ec4899; font-size: .9rem; }
+.clip-bar .btn { margin-left: auto; }
+.my-timetable:has(.clip-bar) .cal-cell, .my-timetable:has(.clip-bar) .wk-col { cursor: copy; }
+.side-check { position: relative; }
+.side-check[data-count]:not([data-count=""])::after { content: attr(data-count); position: absolute; top: 4px; right: 3px; min-width: 15px; height: 15px; padding: 0 3px; border-radius: 999px; background: #ec4899; color: #fff; font-size: 10px; font-weight: 700; line-height: 15px; text-align: center; }
+.already { background: var(--grid); border-radius: 8px; padding: 8px 10px; margin: 0 0 10px; }
