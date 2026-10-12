@@ -367,7 +367,9 @@ table.orders th { font-size: 12px; color: var(--muted); background: var(--soft);
 .ev-0 { --ev: #0ea5e9; } .ev-1 { --ev: #8b5cf6; } .ev-2 { --ev: #10b981; } .ev-3 { --ev: #f59e0b; } .ev-4 { --ev: #64748b; }
 .cal-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 6px 0 12px; }
 .cal-head h2 { margin: 0 6px; font-size: 1.3rem; min-width: 8.5em; text-align: center; }
-.cal-types { margin: 0 0 0 auto; }
+.cal-filters { display: flex; gap: 8px; margin-left: auto; }
+.cal-filters select { width: auto; min-width: 8.5em; padding-top: 6px; padding-bottom: 6px; height: 38px; font-size: .9rem; }
+.cal-legend { display: flex; flex-wrap: wrap; gap: 14px; margin: 0 0 10px; font-size: .85rem; color: var(--muted); }
 .dot-sw { display: inline-block; width: .6em; height: .6em; border-radius: 50%; background: var(--ev); margin-right: 6px; vertical-align: .05em; }
 .cal-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; background: var(--card); }
 .cal-w { text-align: center; font-size: .8rem; color: var(--muted); padding: 8px 0; border-bottom: 1px solid var(--border); }
@@ -398,6 +400,7 @@ table.orders th { font-size: 12px; color: var(--muted); background: var(--soft);
   .cal-ev, .cal-more { display: none; }
   .cal-dots { display: flex; }
   .cal-head h2 { min-width: 0; font-size: 1.1rem; }
-  .cal-types { margin-left: 0; width: 100%; }
+  .cal-filters { margin-left: 0; width: 100%; }
+  .cal-filters select { flex: 1; }
 }
 .calendar > h3 { margin-top: 22px; }
