@@ -599,3 +599,5 @@ table.orders th { font-size: 12px; color: var(--muted); background: var(--soft);
 .drag-ev:hover .ev-del, .drag-ev:focus-within .ev-del { opacity: 1; }
 .ev-del:hover { background: #9d174d; transform: scale(1.1); }
 @media (hover: none) { .ev-del { opacity: .85; } }
+/* 行事曆：學生只能看活動（點一下打開活動頁，不能拖曳） */
+.drag-ev.ev-view { cursor: pointer; touch-action: auto; padding-right: 6px; }
