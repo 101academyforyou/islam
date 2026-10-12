@@ -842,18 +842,21 @@ pages.calendar = async (app, ym) => {
   if (!document.body.contains(app)) return;
   const now = new Date();
   let [y, m] = /^\d{4}-\d{2}$/.test(ym || '') ? ym.split('-').map(Number) : [now.getFullYear(), now.getMonth() + 1];
-  let picked = '', type = '', city = '';
+  let picked = '', city = '';
+  // 勾選要顯示的類型（含「我的學習時間」）；沒勾的不顯示，記在這台電腦
+  let hidden = new Set();
+  try { hidden = new Set(JSON.parse(localStorage.getItem('isl_cal_hidden')) || []); } catch (e) {}
+  const saveHidden = () => { try { localStorage.setItem('isl_cal_hidden', JSON.stringify([...hidden])); } catch (e) {} };
   // 學生自己設定的學習時間
   const hasStudy = !!user && Object.keys(mySchedules).some((id) => hasJoined(id) && findCourse(id));
-  let showStudy = true;
-  try { showStudy = localStorage.getItem('isl_show_study') !== '0'; } catch (e) {}
+  try { if (localStorage.getItem('isl_show_study') === '0') hidden.add('我的學習'); } catch (e) {} // 舊設定
   const types = EVENT_TYPES.filter((t) => list.some((e) => e.type === t));
   const cities = CITIES.filter((c) => list.some((e) => e.city === c));
   function draw() {
     const first = new Date(y, m - 1, 1), days = new Date(y, m, 0).getDate();
     const from = `${y}-${pad2(m)}-01`, to = `${y}-${pad2(m)}-${pad2(days)}`;
-    const shownList = list.filter((e) => (!type || e.type === type) && (!city || e.city === city));
-    const study = showStudy && !type && !city ? studyOccurrences(from, to) : [];
+    const shownList = list.filter((e) => !hidden.has(e.type || '其他') && (!city || e.city === city));
+    const study = hasStudy && !hidden.has('我的學習') && !city ? studyOccurrences(from, to) : [];
     const occ = [...shownList.flatMap((e) => occurrences(e, from, to)), ...study]
       .sort((a, b) => (a.start + (a.allDay ? '' : a.startTime || '')).localeCompare(b.start + (b.allDay ? '' : b.startTime || '')));
     const cells = [];
@@ -872,7 +875,7 @@ pages.calendar = async (app, ym) => {
     const monthEvents = occ.filter((e) => { const k = (e.study ? 'study:' : '') + e.id; return !seen.has(k) && seen.add(k); });
     const rowOf = (e) => (e.study ? studyRow(e) : eventRow(e));
     const dayEvents = picked ? eventsOn(occ, picked) : null;
-    const filters = (types.length > 1 ? `<select class="input" data-filter="type" aria-label="活動類型"><option value="">全部類型</option>${types.map((t) => `<option ${t === type ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select>` : '') +
+    const filters =
       (cities.length ? `<select class="input" data-filter="city" aria-label="縣市"><option value="">全部縣市</option>${cities.map((c) => `<option ${c === city ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select>` : '');
     app.innerHTML = '<div class="container calendar">' +
       '<div class="row-between"><h1>行事曆</h1>' + (isAdmin() ? '<a class="btn btn-sm" href="#/admin/event/new">＋ 新增活動</a>' : '') + '</div>' +
@@ -880,13 +883,15 @@ pages.calendar = async (app, ym) => {
       `<h2>${y} 年 ${m} 月</h2><button type="button" class="btn btn-ghost btn-sm" data-nav="1" aria-label="下個月">›</button>` +
       '<button type="button" class="btn btn-ghost btn-sm" data-nav="0">今天</button>' +
       (filters ? `<span class="cal-filters">${filters}</span>` : '') + '</div>' +
-      ((types.length > 1 || hasStudy) ? '<p class="cal-legend">' + types.map((t) => `<span><i class="dot-sw ${typeClass(t)}"></i>${esc(t)}</span>`).join('') +
-        (hasStudy ? `<label class="study-toggle"><input type="checkbox" id="show-study" ${showStudy ? 'checked' : ''}/> <i class="dot-sw ev-study"></i>我的學習時間（只有你看得到）</label>` : '') + '</p>' : '') +
+      ((types.length || hasStudy) ? '<div class="cal-legend" role="group" aria-label="顯示的類型">' +
+        (hasStudy ? `<label class="type-check ev-study"><input type="checkbox" data-show="我的學習" ${hidden.has('我的學習') ? '' : 'checked'}/><i class="dot-sw ev-study"></i>我的學習時間<span class="muted small">（只有你看得到）</span></label>` : '') +
+        types.map((t) => `<label class="type-check ${typeClass(t)}"><input type="checkbox" data-show="${esc(t)}" ${hidden.has(t) ? '' : 'checked'}/><i class="dot-sw ${typeClass(t)}"></i>${esc(t)}</label>`).join('') +
+        '</div>' : '') +
       '<div class="cal-grid">' + WEEK.map((w) => `<div class="cal-w">${w}</div>`).join('') + cells.join('') + '</div>' +
       (dayEvents
         ? `<h3>${esc(dateLabel(picked))}</h3>` + (dayEvents.length ? '<div class="event-list">' + dayEvents.map(rowOf).join('') + '</div>' : '<p class="muted">這一天沒有活動。</p>')
         : `<h3>${m} 月的活動</h3>` + (monthEvents.length ? '<div class="event-list">' + monthEvents.map(rowOf).join('') + '</div>'
-          : `<p class="muted">${type || city ? '這個月沒有符合條件的活動。' : '這個月還沒有活動。'}</p>`)) +
+          : `<p class="muted">${hidden.size || city ? '這個月沒有符合條件的活動。' : '這個月還沒有活動。'}</p>`)) +
       '</div>';
   }
   app.onclick = (e) => {
@@ -903,9 +908,9 @@ pages.calendar = async (app, ym) => {
     if (cell) { picked = picked === cell.dataset.day ? '' : cell.dataset.day; draw(); }
   };
   app.onchange = (e) => {
-    if (e.target.id === 'show-study') { showStudy = e.target.checked; try { localStorage.setItem('isl_show_study', showStudy ? '1' : '0'); } catch (err) {} return draw(); }
+    const show = e.target.dataset.show;
+    if (show) { if (e.target.checked) hidden.delete(show); else hidden.add(show); saveHidden(); return draw(); }
     const f = e.target.dataset.filter;
-    if (f === 'type') type = e.target.value;
     if (f === 'city') city = e.target.value;
     if (f) draw();
   };
