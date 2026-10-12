@@ -501,12 +501,13 @@ pages.home = (app) => {
     `<p class="site-stats"><span>${ICON.bookOpen} 目前共有 <strong>${path.filter((c) => c.published !== false).length}</strong> 門課程</span>` +
     `<a class="stat-link" href="#/articles" id="stat-articles" hidden>${ICON.fileText} 共 <strong></strong> 篇文章</a>` +
     (learners > 0 ? `<span>${ICON.usersRound} 共 <strong>${learners.toLocaleString()}</strong> 人加入學習</span>` : '') + '</p>' +
-    '<input class="input search" id="q" type="search" placeholder="搜尋課程…" aria-label="搜尋課程" autocomplete="off" />' +
+    '<input class="input search" id="q" type="search" placeholder="搜尋課程或文章…" aria-label="搜尋課程或文章" autocomplete="off" />' +
     '</div></section>' +
     '<section class="container"><h2>學習地圖</h2>' +
     (cats.length ? '<div class="chips" id="chips"><button class="chip" data-cat="">全部</button>' +
       cats.map((c) => `<button class="chip" data-cat="${esc(c)}">${esc(c)}</button>`).join('') + '</div>' : '') +
     '<div class="path" id="list"></div>' +
+    '<div id="search-articles" hidden></div>' +
     (hidden.length ? '<h3 class="muted">不公開的課程（只有管理者看得到這個列表）</h3><div class="path">' + hidden.map((c) => row(c, 0)).join('') + '</div>' : '') +
     '</section>' +
     '<section class="container" id="home-events" hidden></section>' +
@@ -515,14 +516,21 @@ pages.home = (app) => {
     '<p><a class="link" href="#/faq">查看全部常見問題 →</a></p></section>';
 
   const listEl = app.querySelector('#list');
+  let posts = []; // 已發布的文章（搜尋時一起找）
   function draw() {
     app.querySelectorAll('[data-cat]').forEach((b) => b.classList.toggle('active', b.dataset.cat === cat));
     const words = q.split(/\s+/).filter(Boolean);
     const shown = path.map((c, i) => [c, i + 1]).filter(([c]) =>
       (!cat || c.category === cat) &&
       words.every((w) => [c.title, c.subtitle, c.category, c.level, c.description, ...lessonsOf(c).map((l) => l.title)].join(' ').toLowerCase().includes(w)));
+    // 有輸入關鍵字時，也找文章
+    const found = words.length ? posts.filter((a) => words.every((w) => [a.title, a.summary, a.category, a.text].join(' ').toLowerCase().includes(w))) : [];
     listEl.innerHTML = !path.length ? '<p class="muted">課程準備中，敬請期待。</p>'
-      : shown.length ? shown.map(([c, n]) => row(c, n)).join('') : '<p class="muted">找不到符合的課程。</p>';
+      : shown.length ? shown.map(([c, n]) => row(c, n)).join('')
+      : `<p class="muted">找不到符合的課程${found.length ? `，下方有 ${found.length} 篇相關文章` : ''}。</p>`;
+    const box = app.querySelector('#search-articles');
+    box.hidden = !found.length;
+    box.innerHTML = found.length ? `<h3>相關文章（${found.length}）</h3><div class="blog-grid">${found.map(blogCard).join('')}</div>` : '';
   }
   const chips = app.querySelector('#chips');
   if (chips) chips.onclick = (e) => { if (e.target.dataset.cat != null) { cat = e.target.dataset.cat; draw(); } };
@@ -546,7 +554,9 @@ pages.home = (app) => {
   // 最新文章（有發布的文章才顯示）
   loadBlog().then((list) => {
     // 首頁統計：已發布的文章數
-    const n = list.filter((a) => a.published).length;
+    posts = list.filter((a) => a.published);
+    if (q) draw();
+    const n = posts.length;
     const stat = app.querySelector('#stat-articles');
     if (stat && n) { stat.querySelector('strong').textContent = n.toLocaleString(); stat.hidden = false; }
     const box = app.querySelector('#home-blog');

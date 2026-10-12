@@ -407,3 +407,4 @@ table.orders th { font-size: 12px; color: var(--muted); background: var(--soft);
   .cal-filters select { flex: 1; }
 }
 .calendar > h3 { margin-top: 22px; }
+#search-articles { margin: 8px 0 20px; }
