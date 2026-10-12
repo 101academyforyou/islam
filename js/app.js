@@ -520,7 +520,7 @@ pages.my = (app) => {
   };
 
   app.innerHTML = '<div class="container"><div class="row-between"><h1>我的學習區</h1>' +
-    '<span class="lesson-nav"><button type="button" class="btn btn-ghost btn-sm" id="export-all" title="把所有課程的筆記下載成一個 Markdown 檔">⬇ 匯出全部筆記</button>' +
+    '<span class="lesson-nav">' + exportMenu('export-all', '匯出全部筆記') +
     '<button type="button" class="btn btn-ghost btn-sm" id="newfolder">＋ 新增資料夾</button>' +
     '<a class="btn btn-ghost btn-sm" href="#/">＋ 加入更多課程</a></span></div>' +
     (all.length
@@ -557,7 +557,7 @@ pages.my = (app) => {
       .catch((err) => toast('儲存失敗：' + (err.code || err.message) + '（請確認已部署最新的 Firestore 規則）'));
   };
 
-  app.querySelector('#export-all').onclick = () => exportNotes(all, `my-notes-${fmtTime(Date.now()).slice(0, 10).replace(/\//g, '')}.md`);
+  bindExportMenu(app.querySelector('#export-all'), (fmt) => exportNotes(all, `my-notes-${fmtTime(Date.now()).slice(0, 10).replace(/\//g, '')}`, fmt));
   app.querySelector('#newfolder').onclick = () => {
     const name = (prompt('資料夾名稱') || '').trim().slice(0, 40);
     if (!name) return;
@@ -724,24 +724,55 @@ async function flushNote() {
 window.addEventListener('hashchange', flushNote);
 window.addEventListener('pagehide', flushNote);
 
-// 匯出 Markdown：一門課，或全部有筆記的課程（檔名用英數字，避免部分瀏覽器把中文檔名換成 download）
-function notesMarkdown(list) {
-  const out = [`# 我的筆記｜${CONFIG.siteName || '循序漸進學伊斯蘭'}`, '', `匯出時間：${fmtTime(Date.now())}`, ''];
-  list.forEach(({ course, lessons }) => {
-    const written = lessonsOf(course).filter((l) => (lessons[l.id] || {}).text);
-    if (!written.length) return;
-    out.push(`## ${course.title}`, '');
-    course.chapters.forEach((ch) => {
-      const ls = ch.lessons.filter((l) => (lessons[l.id] || {}).text);
-      if (!ls.length) return;
-      if (course.chapters.length > 1) out.push(`### ${ch.title}`, '');
-      ls.forEach((l) => {
-        out.push(`${course.chapters.length > 1 ? '####' : '###'} ${l.title}`, '', lessons[l.id].text.trim(), '',
-          `<sub>最後更新：${fmtTime(lessons[l.id].updatedAt || Date.now())}</sub>`, '');
-      });
+// 匯出筆記：一門課，或全部有筆記的課程；可選 Markdown、純文字、Word、PDF、網頁
+// （檔名用英數字，避免部分瀏覽器把中文檔名換成 download）
+const EXPORT_FORMATS = [
+  ['md', 'Markdown（.md）'], ['txt', '純文字（.txt）'], ['doc', 'Word（.doc）'], ['pdf', 'PDF（列印另存）'], ['html', '網頁（.html）']
+];
+// 整理成「課程 → 章節 → 單元 → 筆記」，只留有寫筆記的部分
+function notesTree(list) {
+  return list.map(({ course, lessons }) => ({
+    title: course.title,
+    multi: course.chapters.length > 1,
+    chapters: course.chapters.map((ch) => ({
+      title: ch.title,
+      lessons: ch.lessons.filter((l) => (lessons[l.id] || {}).text).map((l) => ({ title: l.title, text: lessons[l.id].text.trim(), at: lessons[l.id].updatedAt }))
+    })).filter((ch) => ch.lessons.length)
+  })).filter((c) => c.chapters.length);
+}
+const docTitle = () => `我的筆記｜${CONFIG.siteName || '循序漸進學伊斯蘭'}`;
+function notesMarkdown(tree) {
+  const out = [`# ${docTitle()}`, '', `匯出時間：${fmtTime(Date.now())}`, ''];
+  tree.forEach((c) => {
+    out.push(`## ${c.title}`, '');
+    c.chapters.forEach((ch) => {
+      if (c.multi) out.push(`### ${ch.title}`, '');
+      ch.lessons.forEach((l) => out.push(`${c.multi ? '####' : '###'} ${l.title}`, '', l.text, '', `<sub>最後更新：${fmtTime(l.at || Date.now())}</sub>`, ''));
     });
   });
   return out.join('\n');
+}
+function notesText(tree) {
+  const out = [docTitle(), `匯出時間：${fmtTime(Date.now())}`, ''];
+  tree.forEach((c) => {
+    out.push('='.repeat(30), c.title, '='.repeat(30), '');
+    c.chapters.forEach((ch) => {
+      if (c.multi) out.push(`【${ch.title}】`, '');
+      ch.lessons.forEach((l) => out.push(`■ ${l.title}`, l.text, `（最後更新：${fmtTime(l.at || Date.now())}）`, ''));
+    });
+  });
+  return out.join('\r\n');
+}
+function notesHtml(tree, forPrint = false) {
+  const body = tree.map((c) => `<h2>${esc(c.title)}</h2>` + c.chapters.map((ch) =>
+    (c.multi ? `<h3>${esc(ch.title)}</h3>` : '') + ch.lessons.map((l) =>
+      `<${c.multi ? 'h4' : 'h3'}>${esc(l.title)}</${c.multi ? 'h4' : 'h3'}><p>${esc(l.text).replace(/\n/g, '<br>')}</p>` +
+      `<p class="meta">最後更新：${fmtTime(l.at || Date.now())}</p>`).join('')).join('')).join('');
+  return '<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><title>' + esc(docTitle()) + '</title>' +
+    '<style>body{font-family:"Noto Sans TC","PingFang TC","Microsoft JhengHei",sans-serif;line-height:1.8;max-width:760px;margin:32px auto;padding:0 20px;color:#0f172a}' +
+    'h1{font-size:24px}h2{font-size:20px;border-bottom:2px solid #0ea5e9;padding-bottom:4px;margin-top:32px}h3,h4{font-size:16px;margin:20px 0 4px}' +
+    '.meta{color:#64748b;font-size:12px;margin-top:0}' + (forPrint ? '@media print{body{margin:0}h2{break-after:avoid}}' : '') + '</style></head><body>' +
+    `<h1>${esc(docTitle())}</h1><p class="meta">匯出時間：${fmtTime(Date.now())}</p>` + body + '</body></html>';
 }
 function downloadFile(name, text, type) {
   const url = URL.createObjectURL(new Blob([text], { type }));
@@ -752,12 +783,34 @@ function downloadFile(name, text, type) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 const safeName = (t) => String(t).replace(/[\\/:*?"<>|\s]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'notes';
-async function exportNotes(courses, filename) {
+// base：不含副檔名的檔名
+async function exportNotes(courses, base, fmt = 'md') {
+  // PDF：先開新視窗（要在按下按鈕的當下開，才不會被擋），再填入內容並開啟列印
+  const win = fmt === 'pdf' ? window.open('', '_blank') : null;
   await flushNote();
   const list = [];
   for (const course of courses) list.push({ course, lessons: await loadNotes(course.id).catch(() => ({})) });
-  if (!list.some(({ course, lessons }) => lessonsOf(course).some((l) => (lessons[l.id] || {}).text))) return toast('還沒有任何筆記可以匯出');
-  downloadFile(filename, notesMarkdown(list), 'text/markdown;charset=utf-8');
+  const tree = notesTree(list);
+  if (!tree.length) { if (win) win.close(); return toast('還沒有任何筆記可以匯出'); }
+  if (fmt === 'md') downloadFile(base + '.md', notesMarkdown(tree), 'text/markdown;charset=utf-8');
+  if (fmt === 'txt') downloadFile(base + '.txt', '﻿' + notesText(tree), 'text/plain;charset=utf-8');
+  if (fmt === 'html') downloadFile(base + '.html', notesHtml(tree), 'text/html;charset=utf-8');
+  // Word 可以直接開啟 HTML 格式的 .doc
+  if (fmt === 'doc') downloadFile(base + '.doc', '﻿' + notesHtml(tree), 'application/msword;charset=utf-8');
+  if (fmt === 'pdf') {
+    if (!win) return toast('瀏覽器擋住了新視窗，請允許彈出式視窗後再試一次');
+    win.document.open(); win.document.write(notesHtml(tree, true)); win.document.close();
+    win.focus();
+    setTimeout(() => win.print(), 300);
+    toast('在列印視窗選擇「另存為 PDF」即可');
+  }
+}
+// 匯出選單：按「⬇ 匯出筆記」展開，選擇格式
+const exportMenu = (id, label) => `<details class="export-menu" id="${id}"><summary class="btn btn-ghost btn-sm">⬇ ${label}</summary><div class="export-list">` +
+  EXPORT_FORMATS.map(([k, t]) => `<button type="button" data-fmt="${k}">${t}</button>`).join('') + '</div></details>';
+function bindExportMenu(menu, run) {
+  menu.querySelectorAll('[data-fmt]').forEach((b) => { b.onclick = () => { menu.open = false; run(b.dataset.fmt); }; });
+  document.addEventListener('click', (e) => { if (menu.open && !menu.contains(e.target)) menu.open = false; });
 }
 
 // 上課頁：從 Firestore 讀取不公開的 YouTube 影片 ID
@@ -803,7 +856,7 @@ pages.learn = async (app, id, query, lessonId) => {
     // 我的筆記（自動儲存，只有自己看得到）
     '<div class="pad my-notes"><div class="row-between"><h3>📝 我的筆記</h3>' +
     '<span class="lesson-nav"><span class="muted small" id="note-state"></span>' +
-    '<button type="button" class="btn btn-ghost btn-sm" id="note-export" title="把這門課的筆記下載成 Markdown 檔">⬇ 匯出 Markdown</button></span></div>' +
+    exportMenu('note-export', '匯出筆記') + '</span></div>' +
     `<textarea class="input textarea" id="note" rows="7" placeholder="在這裡記下這個單元的重點…（自動儲存，只有你看得到）">${esc((myNotes[cur.id] || {}).text || '')}</textarea></div>` +
     '</div>' +
     `<aside class="side"><div class="pad"><strong>${esc(c.title)}</strong><div class="bar"><i style="width:${progress(c)}%"></i></div>` +
@@ -823,7 +876,7 @@ pages.learn = async (app, id, query, lessonId) => {
     queueNote(c.id, cur.id, noteEl.value, setState);
   };
   noteEl.onblur = flushNote;
-  app.querySelector('#note-export').onclick = () => exportNotes([c], `notes-${safeName(c.id)}.md`);
+  bindExportMenu(app.querySelector('#note-export'), (fmt) => exportNotes([c], `notes-${safeName(c.id)}`, fmt));
 
   app.querySelector('#done').onclick = () => {
     setDone(c.id, cur.id, !isDone);
