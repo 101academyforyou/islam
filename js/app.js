@@ -499,8 +499,8 @@ pages.home = (app) => {
     `<h1>${esc(CONFIG.tagline || '一步一步，認識伊斯蘭')}</h1>` +
     `<p class="lead muted">${esc(CONFIG.intro || '從最基礎開始，依照學習地圖循序漸進。所有課程免費，登入後加入課程即可觀看。')}</p>` +
     `<p class="site-stats"><span>${ICON.bookOpen} 目前共有 <strong>${path.filter((c) => c.published !== false).length}</strong> 門課程</span>` +
-    (learners > 0 ? `<span>${ICON.usersRound} 共 <strong>${learners.toLocaleString()}</strong> 人加入學習</span>` : '') +
-    `<a class="stat-link" href="#/articles" id="stat-articles" hidden>${ICON.fileText} 共 <strong></strong> 篇文章</a></p>` +
+    `<a class="stat-link" href="#/articles" id="stat-articles" hidden>${ICON.fileText} 共 <strong></strong> 篇文章</a>` +
+    (learners > 0 ? `<span>${ICON.usersRound} 共 <strong>${learners.toLocaleString()}</strong> 人加入學習</span>` : '') + '</p>' +
     '<input class="input search" id="q" type="search" placeholder="搜尋課程…" aria-label="搜尋課程" autocomplete="off" />' +
     '</div></section>' +
     '<section class="container"><h2>學習地圖</h2>' +
