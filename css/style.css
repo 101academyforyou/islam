@@ -320,3 +320,6 @@ table.orders th { font-size: 12px; color: var(--muted); background: var(--soft);
 /* 首頁：課程數、學習人數 */
 .site-stats { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px 22px; margin: 4px 0 18px; color: var(--muted); }
 .site-stats strong { color: var(--primary); font-size: 1.15em; }
+.icon { display: inline-block; vertical-align: -0.15em; flex-shrink: 0; }
+.site-stats span { display: inline-flex; align-items: center; gap: 6px; }
+.site-stats .icon { color: var(--primary); width: 1.15em; height: 1.15em; }

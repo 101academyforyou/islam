@@ -261,7 +261,13 @@ async function loadCounts() {
     learners = st.exists() ? Math.max(0, Number(st.data().n) || 0) : 0;
   } catch (e) { console.error(e); }
 }
-const countText = (c) => joinCount[c.id] > 0 ? `<span class="learners">👥 ${joinCount[c.id].toLocaleString()} 人加入學習</span>` : '';
+// Lucide 線條圖示（https://lucide.dev，ISC 授權），顏色跟著文字
+const lucide = (paths) => `<svg class="icon" viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
+const ICON = {
+  usersRound: lucide('<path d="M18 21a8 8 0 0 0-16 0"/><circle cx="10" cy="8" r="5"/><path d="M22 20c0-3.37-2-6.5-4-8a5 5 0 0 0-.45-8.3"/>'),
+  bookOpen: lucide('<path d="M12 7v14"/><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/>')
+};
+const countText = (c) => joinCount[c.id] > 0 ? `<span class="learners">${ICON.usersRound} ${joinCount[c.id].toLocaleString()} 人加入學習</span>` : '';
 
 async function loadVideos(courseId) {
   if (videoCache[courseId]) return videoCache[courseId];
@@ -346,8 +352,8 @@ pages.home = (app) => {
     '<section class="hero"><div class="container">' +
     `<h1>${esc(CONFIG.tagline || '一步一步，認識伊斯蘭')}</h1>` +
     `<p class="lead muted">${esc(CONFIG.intro || '從最基礎開始，依照學習地圖循序漸進。所有課程免費，登入後加入課程即可觀看。')}</p>` +
-    `<p class="site-stats"><span>📚 目前共有 <strong>${path.filter((c) => c.published !== false).length}</strong> 門課程</span>` +
-    (learners > 0 ? `<span>👥 共 <strong>${learners.toLocaleString()}</strong> 人加入學習</span>` : '') + '</p>' +
+    `<p class="site-stats"><span>${ICON.bookOpen} 目前共有 <strong>${path.filter((c) => c.published !== false).length}</strong> 門課程</span>` +
+    (learners > 0 ? `<span>${ICON.usersRound} 共 <strong>${learners.toLocaleString()}</strong> 人加入學習</span>` : '') + '</p>' +
     '<input class="input search" id="q" type="search" placeholder="搜尋課程…" aria-label="搜尋課程" autocomplete="off" />' +
     '</div></section>' +
     '<section class="container"><h2>學習地圖</h2>' +
