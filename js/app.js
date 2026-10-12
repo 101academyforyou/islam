@@ -436,7 +436,7 @@ pages.learn = async (app, id, query, lessonId) => {
     (i < all.length - 1 ? `<a class="btn btn-ghost btn-sm" href="#/learn/${c.id}/${all[i + 1].id}">下一單元 →</a>` : '') +
     '</div></div>' +
     youtubeEmbed(videos[cur.id]) +
-    '<div class="pad share-warning">🔒 本課程影片為不公開影片，影片連結僅供你本人觀看學習，<strong>請勿分享給其他人</strong>。</div>' +
+    '<div class="pad share-warning">🔗 本課程為公開課程，<strong>歡迎分享</strong>給親友一起學習。</div>' +
     // 單元說明（在 data.js 每個單元的第 4 個欄位填寫）
     (cur.note ? `<div class="pad lesson-note"><h3>單元說明</h3><div>${linkify(esc(cur.note)).replace(/\n/g, '<br>')}</div></div>` : '') +
     '</div>' +
