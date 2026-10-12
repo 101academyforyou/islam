@@ -509,7 +509,7 @@ function renderHeader() {
     '<nav>' +
     '<a href="#/">學習地圖</a><a href="#/articles">文章</a><a href="#/calendar">行事曆</a>' +
     (user
-      ? `<a href="#/my">我的學習區</a>${isAdmin() ? '<a href="#/admin">管理</a>' : ''}<a class="muted small user-name" href="#/account" title="帳號設定（${esc(user.email)}）">${esc(name)}</a><button class="link" id="logout">登出</button>`
+      ? `<a href="#/my">我的學習區</a><a href="#/plan">我的課表</a>${isAdmin() ? '<a href="#/admin">管理</a>' : ''}<a class="muted small user-name" href="#/account" title="帳號設定（${esc(user.email)}）">${esc(name)}</a><button class="link" id="logout">登出</button>`
       : '<a href="#/login" class="btn btn-sm">登入</a>') +
     '<button class="icon-btn" id="theme" aria-label="切換深淺色"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></button>' +
     '</nav></div>';
@@ -885,7 +885,7 @@ pages.calendar = async (app, ym) => {
       '<button type="button" class="btn btn-ghost btn-sm" data-nav="0">今天</button>' +
       (filters ? `<span class="cal-filters">${filters}</span>` : '') + '</div>' +
       ((types.length || hasStudy) ? '<div class="cal-legend" role="group" aria-label="顯示的類型">' +
-        (hasStudy ? `<label class="type-check ev-study"><input type="checkbox" data-show="我的學習" ${hidden.has('我的學習') ? '' : 'checked'}/><i class="dot-sw ev-study"></i>我的學習時間<span class="muted small">（只有你看得到）</span></label>` : '') +
+        (hasStudy ? `<label class="type-check ev-study"><input type="checkbox" data-show="我的學習" ${hidden.has('我的學習') ? '' : 'checked'}/><i class="dot-sw ev-study"></i>我的課表<span class="muted small">（只有你看得到）</span></label>` : '') +
         types.map((t) => `<label class="type-check ${typeClass(t)}"><input type="checkbox" data-show="${esc(t)}" ${hidden.has(t) ? '' : 'checked'}/><i class="dot-sw ${typeClass(t)}"></i>${esc(t)}</label>`).join('') +
         '</div>' : '') +
       '<div class="cal-grid">' + WEEK.map((w) => `<div class="cal-w">${w}</div>`).join('') + cells.join('') + '</div>' +
@@ -1318,7 +1318,7 @@ pages.course = (app, id) => {
   if (mine) {
     box = `<p class="owned">✓ ${isAdmin() && !hasJoined(c.id) ? '管理者' : '已加入'}（進度 ${progress(c)}%）</p>` +
       `<a class="btn btn-block" href="#/learn/${c.id}">${progress(c) ? '繼續學習' : '開始上課'}</a>` +
-      (hasJoined(c.id) ? `<p class="small study-line">${mySchedules[c.id] ? '⏰ ' + esc(scheduleText(mySchedules[c.id])) : ''} <button type="button" class="link small" data-schedule="${esc(c.id)}">${mySchedules[c.id] ? '修改學習時間' : '⏰ 設定學習時間'}</button></p>` : '');
+      (hasJoined(c.id) ? `<p class="small study-line">${mySchedules[c.id] ? '⏰ ' + esc(scheduleText(mySchedules[c.id])) : ''} <button type="button" class="link small" data-schedule="${esc(c.id)}">${mySchedules[c.id] ? '修改' : '⏰ 加入我的課表'}</button></p>` : '');
   } else if (!user) {
     box = '<p><span class="price free">免費</span></p>' +
       `<a class="btn btn-block" href="#/login?next=/course/${c.id}">登入後免費學習</a>` +
@@ -1584,7 +1584,7 @@ const studyRow = (o) => {
       `<span class="muted small">${esc(dateLabel(o.start))}${o.startTime ? ` ${o.startTime}–${o.endTime}` : ''} · ${esc(o.course)}</span></span></a>`;
   }
   return `<a class="card event-row" href="#/learn/${o.id}"><span class="ev-date ev-study"><b>${d}</b><small>${m} 月</small></span>` +
-    `<span class="ev-main"><span class="tag">⏰ 我的學習時間</span><strong>${esc(o.title)}</strong>` +
+    `<span class="ev-main"><span class="tag">⏰ 我的課表（每週固定）</span><strong>${esc(o.title)}</strong>` +
     `<span class="muted small">${esc(scheduleText(o.schedule))}</span></span></a>`;
 };
 function studyFirstDay(sc) {
@@ -1601,7 +1601,7 @@ function studyGoogleUrl(c, sc) {
 }
 function downloadStudyIcs(onlyId) {
   const items = Object.entries(mySchedules).filter(([cid, sc]) => (!onlyId || cid === onlyId) && findCourse(cid) && hasJoined(cid) && (sc.days || []).length);
-  if (!items.length) return toast('還沒有設定學習時間');
+  if (!items.length) return toast('還沒有加入每週課表');
   const escIcs = (t) => String(t || '').replace(/\\/g, '\\\\').replace(/[,;]/g, (m) => '\\' + m).replace(/\r?\n/g, '\\n');
   const stamp = new Date().toISOString().replace(/[-:]/g, '').slice(0, 15) + 'Z';
   const ev = items.flatMap(([cid, sc]) => {
@@ -1621,7 +1621,7 @@ function editSchedule(c) {
     const box = document.createElement('div');
     box.className = 'modal-backdrop';
     box.innerHTML = '<form class="modal card pad" role="dialog" aria-modal="true" aria-labelledby="sc-title">' +
-      `<h3 id="sc-title">⏰ 學習時間</h3><p class="muted small">「${esc(c.title)}」要在什麼時候學習？設定後會顯示在行事曆（只有你看得到），也可以加到手機日曆提醒自己。</p>` +
+      `<h3 id="sc-title">⏰ 加入我的課表</h3><p class="muted small">「${esc(c.title)}」每週要在什麼時候學習？加入後會顯示在「我的課表」和行事曆（只有你看得到），也可以加到手機日曆提醒自己。</p>` +
       '<div class="day-picks">' + WEEK.map((w, i) => `<label><input type="checkbox" name="d" value="${i}" ${cur.days.includes(i) ? 'checked' : ''}/><span>${w}</span></label>`).join('') + '</div>' +
       `<div class="two"><label>時間<input class="input" type="time" name="time" value="${esc(cur.time)}" required/></label>` +
       `<label>每次<select class="input" name="minutes">${[15, 20, 30, 45, 60, 90, 120].map((m) => `<option value="${m}" ${m === cur.minutes ? 'selected' : ''}>${m} 分鐘</option>`).join('')}</select></label></div>` +
@@ -1629,7 +1629,7 @@ function editSchedule(c) {
       `<label>結束日期 <span class="muted small">可留空</span><input class="input" type="date" name="until" value="${esc(cur.until || '')}"/></label></div>` +
       '<p class="small" id="sc-sum"></p>' +
       '<div class="lesson-nav"><button class="btn btn-sm">儲存</button>' +
-      (mySchedules[c.id] ? '<button type="button" class="btn btn-ghost btn-sm" id="sc-gcal">＋ 加入 Google 日曆</button><button type="button" class="btn btn-ghost btn-sm" id="sc-ics">⬇ 下載日曆檔</button><button type="button" class="btn btn-ghost btn-sm" id="sc-del">移除學習時間</button>' : '') +
+      (mySchedules[c.id] ? '<button type="button" class="btn btn-ghost btn-sm" id="sc-gcal">＋ 加入 Google 日曆</button><button type="button" class="btn btn-ghost btn-sm" id="sc-ics">⬇ 下載日曆檔</button><button type="button" class="btn btn-ghost btn-sm" id="sc-del">從課表移除</button>' : '') +
       '<button type="button" class="btn btn-ghost btn-sm" id="sc-cancel">取消</button></div></form>';
     const f = box.querySelector('form');
     const read = () => ({ days: [...f.querySelectorAll('[name=d]:checked')].map((x) => +x.value), time: f.time.value || '20:00', minutes: +f.minutes.value, start: f.start.value || todayStr(), until: f.until.value || '' });
@@ -1648,13 +1648,13 @@ function editSchedule(c) {
       const v = read();
       if (!v.days.length) return toast('請至少選一天');
       if (v.until && v.until < v.start) return toast('結束日期不能早於開始日期');
-      if (await save(v)) { toast('已設定學習時間'); close(true); }
+      if (await save(v)) { toast('已加入我的課表'); close(true); }
     };
     box.onclick = async (e) => {
       if (e.target === box || e.target.id === 'sc-cancel') return close(false);
       if (e.target.id === 'sc-gcal') window.open(studyGoogleUrl(c, mySchedules[c.id]), '_blank', 'noopener');
       if (e.target.id === 'sc-ics') downloadStudyIcs(c.id);
-      if (e.target.id === 'sc-del' && confirm('移除這門課的學習時間？')) { if (await save(null)) { toast('已移除學習時間'); close(true); } }
+      if (e.target.id === 'sc-del' && confirm('把這門課從每週課表移除？')) { if (await save(null)) { toast('已從課表移除'); close(true); } }
     };
     document.addEventListener('keydown', onKey);
     document.body.appendChild(box);
@@ -1692,7 +1692,7 @@ pages.my = (app) => {
       `<h3><a href="#/learn/${c.id}" draggable="false">${esc(c.title)}</a></h3>` +
       `<p class="muted small">${esc(c.subtitle || '')}</p><p class="muted small">${lessonsOf(c).length} 個單元${minutesText(c)}</p>` +
       `<div class="bar"><i style="width:${p}%"></i></div><p class="small owned">${p === 100 ? '✓ 已完成' : `進度 ${p}%`}</p>` +
-      `<p class="small study-line">${mySchedules[c.id] ? `<span>⏰ ${esc(scheduleText(mySchedules[c.id]))}</span> ` : ''}<button type="button" class="link small" data-schedule="${esc(c.id)}">${mySchedules[c.id] ? '修改' : '⏰ 設定學習時間'}</button></p>` +
+      `<p class="small study-line">${mySchedules[c.id] ? `<span>⏰ ${esc(scheduleText(mySchedules[c.id]))}</span> ` : ''}<button type="button" class="link small" data-schedule="${esc(c.id)}">${mySchedules[c.id] ? '修改' : '⏰ 加入我的課表'}</button></p>` +
       `<label class="small muted move-folder">📁 <select data-folder-pick aria-label="移到資料夾"><option value="">未分類</option>` +
       folders.map((f) => `<option value="${esc(f.id)}"${f.id === fid ? ' selected' : ''}>${esc(f.name)}</option>`).join('') + '</select></label></div>' +
       '<button type="button" class="icon-btn my-leave" data-leave aria-label="移出學習區" title="移出學習區">✕</button></div>';
@@ -2251,6 +2251,17 @@ async function renderPlans(box, refresh) {
 // 舊網址
 pages.plans = () => go('/my');
 
+// 我的課表頁上方：每週固定時間的課程（在課程按「⏰ 加入我的課表」設定）
+function weeklySection() {
+  const list = Object.entries(mySchedules).map(([cid, sc]) => ({ c: findCourse(cid), sc })).filter(({ c }) => c && hasJoined(c.id));
+  return '<h2 class="plan-h">每週固定時間</h2>' + (list.length
+    ? '<div class="plan-items">' + list.map(({ c, sc }) => `<div class="card plan-item"><span class="plan-no">⏰</span>` +
+        `<a class="plan-title" href="#/learn/${c.id}"><strong>${esc(c.title)}</strong><span class="muted small">${esc(scheduleText(sc))}</span></a>` +
+        `<span class="plan-acts"><button type="button" class="btn btn-ghost btn-sm" data-week="${esc(c.id)}">修改</button></span></div>`).join('') + '</div>' +
+      '<p class="small"><button type="button" class="link small" id="week-ics">⬇ 全部加入手機／電腦日曆</button></p>'
+    : '<p class="muted small">在「我的學習區」或課程頁按「⏰ 加入我的課表」，就能設定每週固定的學習時間。</p>');
+}
+
 // #/plan：編輯課表；#/plan/play：從第一個未完成的開始播放；#/plan/3：播放第 4 個
 pages.plan = async (app, a, query, b) => {
   if (!user) return go('/login?next=/plan');
@@ -2265,8 +2276,10 @@ pages.plan = async (app, a, query, b) => {
     pages.plan(app);
   };
   app.innerHTML = '<div class="container editor"><a href="#/my" class="muted small">← 我的學習區</a>' +
-    '<div class="row-between"><h1>📋 我的課表</h1><span class="lesson-nav">' +
-    (plan.items.length ? '<a class="btn btn-sm" href="#/plan/play">▶ 播放</a><a class="btn btn-ghost btn-sm" href="#/calendar">📅 行事曆</a><button type="button" class="btn btn-ghost btn-sm" id="plan-clear">清空課表</button>' : '') + '</span></div>' +
+    '<div class="row-between"><h1>📋 我的課表</h1><span class="lesson-nav"><a class="btn btn-ghost btn-sm" href="#/calendar">📅 行事曆</a>' +
+    (plan.items.length ? '<a class="btn btn-sm" href="#/plan/play">▶ 播放</a><button type="button" class="btn btn-ghost btn-sm" id="plan-clear">清空單元課表</button>' : '') + '</span></div>' +
+    weeklySection() +
+    '<h2 class="plan-h">單元課表</h2>' +
     (plan.items.length ? '<p class="muted small">按住 ⠿ 拖曳可以調整順序；按「⏰」設定學習時間，會顯示在行事曆（只有你看得到）。</p>'
       : '<p class="muted">課表還是空的。到任何一個上課頁，按右側單元選單旁的「＋」，就能把單元加進來。</p>') +
     '<div class="plan-items" id="plan-items">' + plan.items.map((it, k) => {
@@ -2280,8 +2293,11 @@ pages.plan = async (app, a, query, b) => {
         (k < plan.items.length - 1 ? '<button type="button" class="icon-btn" data-mv="1" aria-label="往下">↓</button>' : '') +
         '<button type="button" class="icon-btn" data-rm aria-label="從課表移除">✕</button></span></div>';
     }).join('') + '</div></div>';
+  app.querySelectorAll('[data-week]').forEach((b) => { b.onclick = async () => { const c = findCourse(b.dataset.week); if (c && await editSchedule(c)) pages.plan(app); }; });
+  const wics = app.querySelector('#week-ics');
+  if (wics) wics.onclick = () => downloadStudyIcs();
   const clr = app.querySelector('#plan-clear');
-  if (clr) clr.onclick = () => { if (confirm('清空我的課表？（不影響課程和學習進度）')) save([]); };
+  if (clr) clr.onclick = () => { if (confirm('清空單元課表？（不影響每週固定時間、課程和學習進度）')) save([]); };
   const list = app.querySelector('#plan-items');
   list.onclick = async (e) => {
     const row = e.target.closest('.plan-item');
