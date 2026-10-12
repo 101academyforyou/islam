@@ -913,8 +913,10 @@ async function resizeCover(file) {
 pages.admin = async (app, id, query, sub) => {
   if (!adminGuard(app)) return;
   if (id === 'students') return pages.students(app);
+  if (id === 'playlist') return pages.playlist(app);
   if (id) return pages.edit(app, id);
-  app.innerHTML = '<div class="container">' + adminTabs('courses') + '<div class="row-between"><h1>課程管理</h1><a class="btn btn-sm" href="#/admin/new">＋ 新增課程</a></div>' +
+  app.innerHTML = '<div class="container">' + adminTabs('courses') + '<div class="row-between"><h1>課程管理</h1><span class="lesson-nav">' +
+    '<a class="btn btn-ghost btn-sm" href="#/admin/playlist">▶ 從播放清單建立</a><a class="btn btn-sm" href="#/admin/new">＋ 新增課程</a></span></div>' +
     (coursesFromDb ? '' :
       '<div class="card pad notice-card"><strong>第一次使用：請先匯入課程</strong><p class="muted small">目前的課程資料來自網站內建檔案。按下面的按鈕把課程匯入資料庫後，就能在網站上直接編輯。</p>' +
       '<button class="btn btn-sm" id="import">匯入現有課程到資料庫</button></div>') +
@@ -955,6 +957,98 @@ pages.admin = async (app, id, query, sub) => {
 const adminTabs = (cur) => '<div class="chips admin-tabs">' +
   `<a class="chip${cur === 'courses' ? ' active' : ''}" href="#/admin">課程管理（順序 = 學習路線的階段）</a>` +
   `<a class="chip${cur === 'students' ? ' active' : ''}" href="#/admin/students">學生名單</a></div>`;
+
+/* ---------------- 從 YouTube 播放清單建立課程（管理者） ----------------
+ * 用 YouTube Data API v3 讀取播放清單與影片資料（需要 API 金鑰，設定在 config.js 的 youtubeApiKey，
+ * 或在頁面上貼上、只存在這台電腦的瀏覽器）。建立後是「未上架」的草稿，會打開編輯頁讓你檢查。 */
+const YT_API = 'https://www.googleapis.com/youtube/v3/';
+const playlistIdOf = (v) => { v = String(v || '').trim(); const m = /[?&]list=([\w-]+)/.exec(v); return m ? m[1] : (/^(PL|UU|OL|FL|LL)[\w-]{10,}$/.test(v) ? v : null); };
+// ISO 8601 長度（PT1H2M3S）→ 秒
+const isoSeconds = (d) => { const m = /P(?:(\d+)D)?T?(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/.exec(d || '') || []; return ((+m[1] || 0) * 24 + (+m[2] || 0)) * 3600 + (+m[3] || 0) * 60 + (+m[4] || 0); };
+const bestThumb = (t) => { t = t || {}; return (t.maxres || t.standard || t.high || t.medium || t.default || {}).url || ''; };
+async function ytGet(path, params, key) {
+  const url = YT_API + path + '?' + new URLSearchParams({ ...params, key });
+  const r = await fetch(url);
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    const reason = (((j.error || {}).errors || [])[0] || {}).reason || '';
+    const msg = { keyInvalid: 'API 金鑰無效', accessNotConfigured: '這個 API 金鑰還沒啟用 YouTube Data API v3', quotaExceeded: '今天的 API 使用量已用完，請明天再試',
+      playlistNotFound: '找不到這個播放清單（私人播放清單無法讀取，請改成「公開」或「不公開」）', forbidden: '沒有權限讀取這個播放清單' }[reason];
+    throw new Error(msg || (j.error && j.error.message) || ('HTTP ' + r.status));
+  }
+  return j;
+}
+async function fetchPlaylist(pid, key, onProgress) {
+  const meta = await ytGet('playlists', { part: 'snippet', id: pid }, key);
+  if (!meta.items || !meta.items.length) throw new Error('找不到這個播放清單（私人播放清單無法讀取，請改成「公開」或「不公開」）');
+  const sn = meta.items[0].snippet;
+  const items = [];
+  let pageToken = '';
+  do {
+    const r = await ytGet('playlistItems', { part: 'snippet,contentDetails', playlistId: pid, maxResults: 50, ...(pageToken ? { pageToken } : {}) }, key);
+    (r.items || []).forEach((it) => items.push({ id: it.contentDetails.videoId, title: it.snippet.title, description: it.snippet.description || '' }));
+    pageToken = r.nextPageToken || '';
+    onProgress(`已讀取 ${items.length} 部影片…`);
+  } while (pageToken && items.length < 500);
+  // 刪除或私人的影片讀不到內容，略過
+  const ok = items.filter((v) => v.id && !/^(Private|Deleted) video$/.test(v.title));
+  const dur = {};
+  for (let i = 0; i < ok.length; i += 50) {
+    const r = await ytGet('videos', { part: 'contentDetails', id: ok.slice(i, i + 50).map((v) => v.id).join(',') }, key);
+    (r.items || []).forEach((v) => { dur[v.id] = isoSeconds(v.contentDetails.duration); });
+  }
+  return { title: sn.title, description: sn.description || '', cover: bestThumb(sn.thumbnails), videos: ok.map((v) => ({ ...v, duration: dur[v.id] || 0 })), skipped: items.length - ok.length };
+}
+pages.playlist = (app) => {
+  if (!adminGuard(app)) return;
+  let savedKey = '';
+  try { savedKey = localStorage.getItem('isl_yt_key') || ''; } catch (e) {}
+  const cfgKey = CONFIG.youtubeApiKey || '';
+  app.innerHTML = '<div class="container editor"><a href="#/admin" class="muted small">← 課程管理</a><h1>從 YouTube 播放清單建立課程</h1>' +
+    '<form class="card pad" id="pl" novalidate>' +
+    '<label>播放清單網址<input class="input" name="url" placeholder="https://www.youtube.com/playlist?list=PL…" required/></label>' +
+    (cfgKey ? '' : `<label>YouTube API 金鑰 <span class="muted small">只會存在這台電腦的瀏覽器；也可以請工程師設定在 config.js 的 youtubeApiKey</span><input class="input" name="key" value="${esc(savedKey)}" placeholder="AIza…"/></label>`) +
+    '<label class="check"><input type="checkbox" name="desc" checked/> 把每部影片的說明放進「單元說明」</label>' +
+    '<button class="btn btn-sm" id="go">讀取並建立課程</button><p class="small muted" id="plmsg"></p>' +
+    '<p class="muted small">會用播放清單的名稱、說明、封面建立一門<strong>未上架</strong>的課程，每部影片一個單元（標題、長度、影片網址都會自動設定），建立後打開編輯頁讓你檢查、補充，再勾選「上架」。播放清單和影片要是「公開」或「不公開」，「私人」的讀不到。</p></form></div>';
+  const f = app.querySelector('#pl'), msg = app.querySelector('#plmsg');
+  f.onsubmit = async (e) => {
+    e.preventDefault();
+    const pid = playlistIdOf(f.elements.url.value);
+    if (!pid) return toast('請貼上播放清單網址（網址裡要有 list=…）');
+    const key = cfgKey || (f.elements.key.value || '').trim();
+    if (!key) return toast('請填入 YouTube API 金鑰');
+    if (!cfgKey) { try { localStorage.setItem('isl_yt_key', key); } catch (err) {} }
+    const btn = app.querySelector('#go'); btn.disabled = true;
+    msg.className = 'small muted'; msg.textContent = '讀取播放清單中…';
+    try {
+      const p = await fetchPlaylist(pid, key, (t) => { msg.textContent = t; });
+      if (!p.videos.length) throw new Error('這個播放清單沒有可以讀取的影片');
+      msg.textContent = `讀到 ${p.videos.length} 部影片，建立課程中…`;
+      const lessons = p.videos.map((v, i) => ({ id: 'l' + (i + 1), title: v.title, duration: v.duration, note: f.elements.desc.checked ? v.description.trim().slice(0, 3000) : '' }));
+      const c = {
+        id: newId('c'), title: p.title.slice(0, 120), subtitle: '', category: '', level: '入門', price: 0, instructor: '',
+        thumb: ['#0ea5e9', '#7dd3fc', p.title.slice(0, 4)], cover: p.cover, trailer: '',
+        description: p.description.trim().slice(0, 5000), outcomes: [],
+        chapters: [{ title: '課程內容', lessons }], published: false, order: courses.length, playlistId: pid, updatedAt: Date.now()
+      };
+      const videos = {};
+      p.videos.forEach((v, i) => { videos['l' + (i + 1)] = 'https://youtu.be/' + v.id; });
+      const data = { ...c }; delete data.id;
+      await fb.setDoc(fb.doc(db, COL.courses, c.id), data);
+      await fb.setDoc(fb.doc(db, COL.videos, c.id), videos);
+      videoCache[c.id] = { ...videos };
+      courses.push(c);
+      coursesFromDb = true;
+      toast(`已建立「${c.title}」（${lessons.length} 個單元${p.skipped ? `，略過 ${p.skipped} 部私人或已刪除的影片` : ''}），請檢查後上架`);
+      go('/admin/' + c.id);
+    } catch (err) {
+      console.error(err);
+      btn.disabled = false;
+      msg.className = 'small expired'; msg.textContent = '⚠ ' + (err.code ? err.code + '：' : '') + err.message;
+    }
+  };
+};
 
 // 學生名單：加入過伊斯蘭網站課程的學生（islam_students），可搜尋、匯出 CSV
 const fmtDate = (ms) => { if (!ms) return ''; const d = new Date(ms); return `${d.getFullYear()}/${pad2(d.getMonth() + 1)}/${pad2(d.getDate())}`; };

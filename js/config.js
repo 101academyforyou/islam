@@ -19,6 +19,10 @@ window.SITE_CONFIG = {
   tagline: '一步一步，認識伊斯蘭',
   intro: '從最基礎開始，依照學習路線循序漸進。所有課程免費，登入後加入課程即可觀看。',
 
+  // YouTube Data API 金鑰：管理頁「從播放清單建立課程」用（留空也可以，在頁面上貼上即可）
+  // 請在 Google Cloud 主控台限制只能用於 islam.onepointzeroone.org，並只啟用 YouTube Data API v3
+  youtubeApiKey: '',
+
   // 管理者 Email：登入後可在網站上編輯課程（右上角「管理」）
   // ⚠️ 只改這裡不夠，也要同步修改 1.01academy repo 的 firestore.rules 裡的 isIslamAdmin()，那裡才是真正的權限控管
   admins: ['salimachchang@gmail.com', '1.01academyforyou@gmail.com']

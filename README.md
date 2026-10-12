@@ -40,6 +40,17 @@ CNAME             自訂網域 islam.onepointzeroone.org
 - 勾選「不公開」的課程不會出現在學習路線，只有拿到課程連結的人能進入。
 - 取消勾選「上架」的課程只有管理者看得到。
 
+## 從 YouTube 播放清單建立課程
+
+「管理 → ▶ 從播放清單建立」貼上播放清單網址，會自動用播放清單的名稱、說明、封面建立一門**未上架**的課程，每部影片一個單元（標題、長度、說明、影片網址都自動設定），再打開編輯頁讓你檢查後上架。播放清單和影片要是「公開」或「不公開」。
+
+需要一組 YouTube Data API 金鑰（免費，每天的額度足夠建立很多門課）：
+
+1. 到 [Google Cloud 主控台](https://console.cloud.google.com/apis/library/youtube.googleapis.com?project=academy-213ba) → **啟用** YouTube Data API v3
+2. **API 和服務 → 憑證 → 建立憑證 → API 金鑰**
+3. 編輯這把金鑰：「應用程式限制」選**網站**，加入 `https://islam.onepointzeroone.org/*`；「API 限制」只勾 **YouTube Data API v3**
+4. 把金鑰貼到 `js/config.js` 的 `youtubeApiKey`（或第一次使用時直接貼在頁面上，只會存在那台電腦的瀏覽器）
+
 ## 本機預覽
 
 ```bash
