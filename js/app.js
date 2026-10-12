@@ -973,14 +973,16 @@ async function ytGet(path, params, key) {
   if (!r.ok) {
     const reason = (((j.error || {}).errors || [])[0] || {}).reason || '';
     const msg = { keyInvalid: 'API 金鑰無效', accessNotConfigured: '這個 API 金鑰還沒啟用 YouTube Data API v3', quotaExceeded: '今天的 API 使用量已用完，請明天再試',
-      playlistNotFound: '找不到這個播放清單（私人播放清單無法讀取，請改成「公開」或「不公開」）', forbidden: '沒有權限讀取這個播放清單' }[reason];
+      playlistNotFound: '找不到這個播放清單，請確認網址正確，而且播放清單是「公開」的', forbidden: '沒有權限讀取這個播放清單' }[reason];
     throw new Error(msg || (j.error && j.error.message) || ('HTTP ' + r.status));
   }
   return j;
 }
 async function fetchPlaylist(pid, key, onProgress) {
-  const meta = await ytGet('playlists', { part: 'snippet', id: pid }, key);
-  if (!meta.items || !meta.items.length) throw new Error('找不到這個播放清單（私人播放清單無法讀取，請改成「公開」或「不公開」）');
+  const meta = await ytGet('playlists', { part: 'snippet,status', id: pid }, key);
+  if (!meta.items || !meta.items.length) throw new Error('找不到這個播放清單，請確認網址正確，而且播放清單是「公開」的');
+  // 只接受公開的播放清單
+  if ((meta.items[0].status || {}).privacyStatus !== 'public') throw new Error('只接受「公開」的播放清單，請到 YouTube 把這個播放清單的瀏覽權限改成「公開」後再試一次');
   const sn = meta.items[0].snippet;
   const items = [];
   let pageToken = '';
@@ -1010,7 +1012,7 @@ pages.playlist = (app) => {
     (cfgKey ? '' : `<label>YouTube API 金鑰 <span class="muted small">只會存在這台電腦的瀏覽器；也可以請工程師設定在 config.js 的 youtubeApiKey</span><input class="input" name="key" value="${esc(savedKey)}" placeholder="AIza…"/></label>`) +
     '<label class="check"><input type="checkbox" name="desc" checked/> 把每部影片的說明放進「單元說明」</label>' +
     '<button class="btn btn-sm" id="go">讀取並建立課程</button><p class="small muted" id="plmsg"></p>' +
-    '<p class="muted small">會用播放清單的名稱、說明、封面建立一門<strong>未上架</strong>的課程，每部影片一個單元（標題、長度、影片網址都會自動設定），建立後打開編輯頁讓你檢查、補充，再勾選「上架」。播放清單和影片要是「公開」或「不公開」，「私人」的讀不到。</p></form></div>';
+    '<p class="muted small">會用播放清單的名稱、說明、封面建立一門<strong>未上架</strong>的課程，每部影片一個單元（標題、長度、影片網址都會自動設定），建立後打開編輯頁讓你檢查、補充，再勾選「上架」。<strong>只接受「公開」的播放清單</strong>；清單裡私人或已刪除的影片會自動略過。</p></form></div>';
   const f = app.querySelector('#pl'), msg = app.querySelector('#plmsg');
   f.onsubmit = async (e) => {
     e.preventDefault();
