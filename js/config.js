@@ -25,5 +25,5 @@ window.SITE_CONFIG = {
 
   // 管理者 Email：登入後可在網站上編輯課程（右上角「管理」）
   // ⚠️ 只改這裡不夠，也要同步修改 1.01academy repo 的 firestore.rules 裡的 isIslamAdmin()，那裡才是真正的權限控管
-  admins: ['salimachchang@gmail.com', '1.01academyforyou@gmail.com']
+  admins: ['salimachchang@gmail.com', '1.01academyforyou@gmail.com', 'nadiamai@gmail.com', 'colorful6dorie@gmail.com']
 };
