@@ -1,28 +1,28 @@
-/* 1.01 Academy — 清爽科技風（精簡版） */
+/* 循序漸進學伊斯蘭 — 水藍色風格 */
 :root {
-  --bg: #f6f8fc;
+  --bg: #f0f9ff;
   --card: #ffffff;
-  --soft: #eef2f9;
+  --soft: #e0f2fe;
   --text: #0f172a;
   --muted: #64748b;
-  --border: #e2e8f0;
-  --primary: #0f766e;
-  --ok: #059669;
-  --grad: linear-gradient(135deg, #14b8a6, #0f766e 60%, #065f46);
-  --grid: rgba(15, 118, 110, .06);
+  --border: #d6e9f8;
+  --primary: #0284c7;
+  --ok: #0891b2;
+  --grad: linear-gradient(135deg, #38bdf8, #0ea5e9 50%, #0284c7);
+  --grid: rgba(14, 165, 233, .06);
   --radius: 14px;
   --font: 'Inter', 'Noto Sans TC', system-ui, -apple-system, 'PingFang TC', 'Microsoft JhengHei', sans-serif;
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme='light']) {
-    --bg: #070b16; --card: #0e1424; --soft: #151d32; --text: #e6ebf5; --muted: #94a3b8;
-    --border: #1e2a42; --primary: #2dd4bf; --ok: #34d399; --grid: rgba(45, 212, 191, .07); color-scheme: dark;
+    --bg: #06111d; --card: #0b1a2b; --soft: #10243a; --text: #e6ebf5; --muted: #94a3b8;
+    --border: #1b3350; --primary: #7dd3fc; --ok: #67e8f9; --grid: rgba(125, 211, 252, .07); color-scheme: dark;
   }
 }
 :root[data-theme='dark'] {
-  --bg: #070b16; --card: #0e1424; --soft: #151d32; --text: #e6ebf5; --muted: #94a3b8;
-  --border: #1e2a42; --primary: #2dd4bf; --ok: #34d399; --grid: rgba(45, 212, 191, .07); color-scheme: dark;
+  --bg: #06111d; --card: #0b1a2b; --soft: #10243a; --text: #e6ebf5; --muted: #94a3b8;
+  --border: #1b3350; --primary: #7dd3fc; --ok: #67e8f9; --grid: rgba(125, 211, 252, .07); color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
@@ -41,7 +41,7 @@ h3 { font-size: 16px; margin: 6px 0; line-height: 1.4; }
 .row-between { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
 
 /* 按鈕與表單 */
-.btn { display: inline-flex; align-items: center; justify-content: center; height: 44px; padding: 0 20px; border: 0; border-radius: 10px; background: var(--grad); color: #fff; font: inherit; font-weight: 600; cursor: pointer; transition: transform .15s; box-shadow: 0 6px 18px -8px rgba(15, 118, 110, .6); }
+.btn { display: inline-flex; align-items: center; justify-content: center; height: 44px; padding: 0 20px; border: 0; border-radius: 10px; background: var(--grad); color: #fff; font: inherit; font-weight: 600; cursor: pointer; transition: transform .15s; box-shadow: 0 6px 18px -8px rgba(14, 165, 233, .6); }
 .btn:hover { transform: translateY(-1px); }
 .btn:disabled { opacity: .6; cursor: wait; }
 .btn-sm { height: 36px; padding: 0 14px; font-size: 14px; }
@@ -49,7 +49,7 @@ h3 { font-size: 16px; margin: 6px 0; line-height: 1.4; }
 .btn-ghost { background: var(--soft); color: var(--text); box-shadow: none; }
 .link { background: none; border: 0; padding: 0; font: inherit; color: var(--primary); cursor: pointer; }
 .input { width: 100%; height: 44px; margin-top: 6px; padding: 0 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--card); color: var(--text); font: inherit; }
-.input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 4px rgba(15, 118, 110, .12); }
+.input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 4px rgba(14, 165, 233, .12); }
 label { display: block; font-size: 14px; font-weight: 600; margin-bottom: 14px; }
 .two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 form.card, .narrow > .card { margin-bottom: 16px; }

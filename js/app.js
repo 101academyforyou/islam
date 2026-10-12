@@ -536,11 +536,11 @@ pages.edit = async (app, id) => {
   // 工作副本
   const c = isNew ? {
     id: newId('c'), title: '', subtitle: '', category: '', level: '入門', price: 0, instructor: '',
-    thumb: ['#0f766e', '#14b8a6', '伊斯蘭'], cover: '', trailer: '', description: '', outcomes: [],
+    thumb: ['#0ea5e9', '#7dd3fc', '伊斯蘭'], cover: '', trailer: '', description: '', outcomes: [],
     chapters: [{ title: '課程內容', lessons: [{ id: newId('l'), title: '', duration: 0, note: '' }] }],
     published: false, order: courses.length
   } : JSON.parse(JSON.stringify(src));
-  c.thumb = c.thumb || ['#0f766e', '#14b8a6', '伊斯蘭'];
+  c.thumb = c.thumb || ['#0ea5e9', '#7dd3fc', '伊斯蘭'];
   let videos = {};
   if (!isNew) {
     try { videos = { ...(await fb.getDoc(fb.doc(db, COL.videos, c.id))).data() }; } catch (e) { console.error(e); }
