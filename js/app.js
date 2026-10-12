@@ -292,7 +292,8 @@ pages.home = (app) => {
   const cats = categoriesOf(path);
   let cat = '', q = '';
   const joinBtn = (c) => {
-    if (!user) return `<a class="btn btn-ghost btn-sm" href="#/login?next=/" data-stop>＋ 加入學習區</a>`;
+    // 卡片本身是連結，裡面不能再放 <a>（瀏覽器會把卡片拆開），所以用按鈕
+    if (!user) return '<button type="button" class="btn btn-ghost btn-sm" data-stop>＋ 加入學習區</button>';
     if (!isVerified() || hasJoined(c.id)) return '';
     return `<button type="button" class="btn btn-ghost btn-sm" data-join="${esc(c.id)}">＋ 加入學習區</button>`;
   };
@@ -300,7 +301,7 @@ pages.home = (app) => {
     `<a class="card step" href="#/course/${c.id}">` +
     `<span class="step-no">${n ? n : '–'}</span>${thumb(c)}<div class="step-body">` +
     `<span class="tag">${[n ? `第 ${n} 階段` : '', c.category, c.level, c.unlisted ? '不公開' : '', c.published === false ? '未上架' : ''].filter(Boolean).map(esc).join(' · ')}</span>` +
-    `<h3>${esc(c.title)}</h3><p class="muted small">${esc(c.subtitle || '')}</p>` +
+    `<h3>${esc(c.title)}</h3>` + (c.subtitle ? `<p class="muted small">${esc(c.subtitle)}</p>` : '') +
     `<p class="muted small">${lessonsOf(c).length} 個單元${minutesText(c)}</p>` +
     `<div class="step-foot">${statusOf(c) || '<span class="price free">免費</span>'}${joinBtn(c)}</div></div></a>`;
   app.innerHTML =
