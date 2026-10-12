@@ -361,3 +361,4 @@ table.orders th { font-size: 12px; color: var(--muted); background: var(--soft);
 .article img.media-img:not([src]) { min-height: 120px; width: 100%; background: var(--grid); }
 .article img.media-missing { display: none; }
 .media-tools { display: flex; align-items: center; gap: 10px; margin: 2px 0 6px; }
+.editor .blog-cover { max-width: 360px; }

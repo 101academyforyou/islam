@@ -649,6 +649,8 @@ pages.blogEdit = async (app, id) => {
   function draw() {
     app.innerHTML = `<div class="container editor"><a href="#/admin/articles" class="muted small">← 文章管理</a><h1>${isNew ? '新增文章' : '編輯文章'}</h1>` +
       '<form id="ae" novalidate><div class="card pad">' +
+      field('文章連結 <span class="muted small">貼上外部文章網址，會自動填好標題、摘要、封面；可留空</span>', 'url', a.url, 'placeholder="https://…"') +
+      '<div class="media-tools"><button type="button" class="btn btn-ghost btn-sm" id="fill">↻ 從連結重新填寫標題、摘要、封面</button><span class="muted small" id="fill-state"></span></div>' +
       field('標題', 'title', a.title, 'required maxlength="200"') +
       field('摘要 <span class="muted small">顯示在文章列表，可留空</span>', 'summary', a.summary, 'maxlength="300"') +
       field('分類 <span class="muted small">可留空，例如：信仰、生活、節日</span>', 'category', a.category) +
@@ -656,8 +658,7 @@ pages.blogEdit = async (app, id) => {
       '<div class="card pad"><h3>封面照片 <span class="muted small">可留空</span></h3>' +
       (a.cover ? `<img class="blog-cover" src="${esc(a.cover)}" alt=""><button type="button" class="btn btn-ghost btn-sm" id="cover-remove">移除封面照片</button>` : '') +
       '<label>上傳封面照片 <span class="muted small">建議 16:9 橫向圖片，會自動裁切成 960×540</span><input class="input" type="file" accept="image/*" id="cover-file"/></label></div>' +
-      '<div class="card pad"><h3>內容</h3><p class="muted small">可以貼外部文章連結、自己寫內容，或兩者都放（連結的文章顯示在上方）。</p>' +
-      field('文章連結 <span class="muted small">可留空。貼上外部文章網址，讀者會在網站上直接看到這篇文章</span>', 'url', a.url, 'placeholder="https://…"') +
+      '<div class="card pad"><h3>內容</h3><p class="muted small">有文章連結時，讀者會在網站上直接看到那篇文章；也可以在這裡自己寫內容（顯示在連結文章下方），或只寫內容不放連結。</p>' +
       `<label>文章內容 <span class="muted small">可留空。支援 # 標題、**粗體**、- 清單、&gt; 引用、[文字](網址)、![說明](圖片網址)</span>` +
       `</label>` + mediaButton('text') +
       `<textarea class="input textarea" name="text" rows="14" placeholder="在這裡寫文章內容…">${esc(a.text)}</textarea>` +
@@ -697,8 +698,45 @@ pages.blogEdit = async (app, id) => {
     }).catch((err) => { console.error(err); setStatus('⚠ 儲存失敗：' + (err.code || err.message), true); return false; });
     return chain;
   }
+  // 貼上文章連結：由 Cloud Function 讀取網頁的標題、摘要、封面圖片
+  // overwrite = false：只填空白的欄位（貼上時自動）；true：全部換成連結的資料（按按鈕）
+  let lastFilled = '';
+  async function fillFromLink(overwrite) {
+    collect();
+    const st = app.querySelector('#fill-state');
+    if (!/^https?:\/\/\S+$/i.test(a.url)) { if (overwrite) toast('請先貼上以 https:// 開頭的文章連結'); return; }
+    if (!overwrite && (lastFilled === a.url || (a.title && a.summary && a.cover))) return;
+    lastFilled = a.url;
+    st.textContent = '讀取文章資料中…';
+    try {
+      const fn = await import(FIREBASE + 'firebase-functions.js');
+      const r = (await fn.httpsCallable(fn.getFunctions(fbApp, 'asia-east1'), 'islamLinkPreview')({ url: a.url })).data;
+      collect(); // 讀取期間可能又打了字
+      const filled = [];
+      if (r.title && (overwrite || !a.title)) { a.title = r.title; filled.push('標題'); }
+      if (r.summary && (overwrite || !a.summary)) { a.summary = r.summary; filled.push('摘要'); }
+      if (r.image && (overwrite || !a.cover)) {
+        try {
+          const blob = await (await fetch(`data:${r.image.type};base64,${r.image.data}`)).blob();
+          a.cover = await resizeCover(blob);
+          filled.push('封面');
+        } catch (e) { console.warn('封面圖片無法使用', e); }
+      }
+      draw(); bind();
+      app.querySelector('#fill-state').textContent = filled.length ? `✓ 已自動填入${filled.join('、')}，請檢查後再發布` : '這個網頁沒有可以自動填入的資料';
+      if (filled.length) autosave(0);
+    } catch (e) {
+      console.error(e);
+      st.textContent = '';
+      toast('無法讀取這個連結：' + (e.message && !/internal/i.test(e.code || '') ? e.message : '請稍後再試，或手動填寫'));
+    }
+  }
+
   function bind() {
     const f = app.querySelector('#ae');
+    f.url.addEventListener('change', () => fillFromLink(false));
+    f.url.addEventListener('paste', () => setTimeout(() => fillFromLink(false), 0));
+    app.querySelector('#fill').onclick = () => fillFromLink(true);
     f.addEventListener('input', (e) => {
       if (e.target.name === 'text') {
         const pv = app.querySelector('#apv');
