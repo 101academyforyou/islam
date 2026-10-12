@@ -327,7 +327,12 @@ async function joinCourse(c, btn, stay = false) {
     if (!joined.includes(c.id)) joined.push(c.id);
     joinedAt[c.id] = at;
     syncStudent(true);
-    toast('已加入我的學習區');
+    // 選擇要放到哪個資料夾（可略過）
+    const folder = await pickFolder(c);
+    if (folder) {
+      try { await fileCourse(c.id, folder); toast(`已加入學習區的「${folder.name}」`); }
+      catch (e) { console.error(e); toast('已加入學習區（資料夾沒有存到，可以到「我的學習區」整理）'); }
+    } else toast('已加入我的學習區');
     if (stay) render(); else go('/learn/' + c.id);
   } catch (err) {
     btn.disabled = false;
@@ -355,6 +360,51 @@ async function saveArea(order, folders) {
   myOrder = order;
   myFolders = folders;
   await fb.setDoc(fb.doc(db, COL.prefs, user.email.toLowerCase()), { order, folders, updatedAt: Date.now() });
+}
+
+// 加入課程後的「放到哪個資料夾」視窗：回傳 { id, name }，選未分類或關閉則回傳 null
+function pickFolder(c) {
+  return new Promise((resolve) => {
+    const box = document.createElement('div');
+    box.className = 'modal-backdrop';
+    const list = () => myFolders.map((f) => `<button type="button" class="folder-pick" data-fid="${esc(f.id)}">📁 ${esc(f.name)}<span class="muted small">${(f.courses || []).length} 門課</span></button>`).join('');
+    const draw = () => {
+      box.innerHTML = '<div class="modal card pad" role="dialog" aria-modal="true" aria-labelledby="pf-title">' +
+        `<h3 id="pf-title">✓ 已加入學習區</h3><p class="muted small">要把「${esc(c.title)}」放到哪個資料夾？</p>` +
+        '<div class="folder-picks">' + list() +
+        '<button type="button" class="folder-pick" data-fid="">🗂 不分類（放在最外層）</button></div>' +
+        '<form class="folder-new" id="pf-new"><input class="input" name="name" maxlength="40" placeholder="或輸入新資料夾名稱，例如：信仰基礎"/><button class="btn btn-sm">＋ 新增並放入</button></form>' +
+        '<p class="muted small">之後也可以在「我的學習區」拖曳調整。</p></div>';
+    };
+    const close = (v) => { box.remove(); document.removeEventListener('keydown', onKey); resolve(v); };
+    const onKey = (e) => { if (e.key === 'Escape') close(null); };
+    draw();
+    box.onclick = (e) => {
+      if (e.target === box) return close(null);
+      const b = e.target.closest('[data-fid]');
+      if (!b) return;
+      close(b.dataset.fid ? myFolders.find((f) => f.id === b.dataset.fid) || null : null);
+    };
+    box.onsubmit = (e) => {
+      e.preventDefault();
+      const name = e.target.name.value.trim().slice(0, 40);
+      if (!name) return toast('請輸入資料夾名稱');
+      if (myFolders.length >= 30) return toast('資料夾最多 30 個');
+      close({ id: newId('f'), name, isNew: true });
+    };
+    document.addEventListener('keydown', onKey);
+    document.body.appendChild(box);
+    const first = box.querySelector('.folder-pick');
+    if (first) first.focus();
+  });
+}
+// 把課程放進資料夾（新資料夾會一起建立）；同一門課只會在一個地方
+async function fileCourse(courseId, folder) {
+  const folders = myFolders.map((f) => ({ ...f, courses: (f.courses || []).filter((id) => id !== courseId) }));
+  let target = folders.find((f) => f.id === folder.id);
+  if (!target) { target = { id: folder.id, name: folder.name, courses: [] }; folders.push(target); }
+  target.courses.push(courseId);
+  await saveArea(myOrder.filter((id) => id !== courseId), folders);
 }
 
 // 從 Firestore 讀取課程目錄；資料庫還沒有課程時，沿用 data.js

@@ -408,3 +408,13 @@ table.orders th { font-size: 12px; color: var(--muted); background: var(--soft);
 }
 .calendar > h3 { margin-top: 22px; }
 #search-articles { margin: 8px 0 20px; }
+
+/* 加入課程後選資料夾 */
+.modal-backdrop { position: fixed; inset: 0; z-index: 60; background: rgba(15, 23, 42, .45); display: grid; place-items: center; padding: 16px; }
+.modal { width: min(440px, 100%); max-height: calc(100vh - 32px); overflow: auto; }
+.modal h3 { margin: 0 0 4px; }
+.folder-picks { display: grid; gap: 8px; margin: 12px 0; }
+.folder-pick { display: flex; justify-content: space-between; align-items: center; gap: 10px; width: 100%; padding: 11px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--card); color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.folder-pick:hover, .folder-pick:focus-visible { border-color: var(--primary); background: var(--grid); outline: none; }
+.folder-new { display: flex; gap: 8px; margin-bottom: 8px; }
+.folder-new .input { flex: 1; margin: 0; }
