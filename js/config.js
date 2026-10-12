@@ -20,6 +20,6 @@ window.SITE_CONFIG = {
   intro: '從最基礎開始，依照學習路線循序漸進。所有課程免費，登入後加入課程即可觀看。',
 
   // 管理者 Email：登入後可在網站上編輯課程（右上角「管理」）
-  // ⚠️ 只改這裡不夠，也要同步修改 1.01academy repo 的 firestore.rules 裡的 isAdmin()，那裡才是真正的權限控管
-  admins: ['salimachchang@gmail.com']
+  // ⚠️ 只改這裡不夠，也要同步修改 1.01academy repo 的 firestore.rules 裡的 isIslamAdmin()，那裡才是真正的權限控管
+  admins: ['salimachchang@gmail.com', '1.01academyforyou@gmail.com']
 };

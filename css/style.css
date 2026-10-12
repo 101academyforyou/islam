@@ -197,7 +197,7 @@ code { font-family: 'JetBrains Mono', monospace; font-size: .9em; background: va
 .free-window { border: 1px dashed var(--border); border-radius: 10px; padding: 12px 14px 2px; margin: 4px 0 14px; }
 .free-window p { margin: 4px 0 10px; }
 
-/* 上課頁：請勿分享提醒 */
+/* 上課頁：公開課程、歡迎分享 */
 .share-warning { margin: 0; padding-top: 10px; padding-bottom: 10px; font-size: 13px; color: var(--muted); background: var(--soft); border-bottom: 1px solid var(--border); }
 
 /* 管理者：上傳影片 */
