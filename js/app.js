@@ -7,7 +7,7 @@
  * 安全規則在 1.01academy repo 的 firestore.rules。
  */
 // 這個網站的 Firestore 集合名稱
-const COL = { courses: 'islam_courses', videos: 'islam_courseVideos', enroll: 'islam_enroll' };
+const COL = { courses: 'islam_courses', videos: 'islam_courseVideos', enroll: 'islam_enroll', prefs: 'islam_prefs' };
 const FIREBASE = 'https://www.gstatic.com/firebasejs/10.12.2/';
 const CONFIG = window.SITE_CONFIG || {};
 const configured = !!(CONFIG.firebaseConfig && CONFIG.firebaseConfig.apiKey);
@@ -16,6 +16,7 @@ let fb = null;           // Firebase 函式
 let auth = null, db = null, fbApp = null;
 let user = null;         // 目前登入的 Firebase 使用者
 let joined = [];         // 已加入的課程 id（從課程頁按「加入課程」）
+let myOrder = [];        // 學生自己在「我的學習區」拖曳排好的順序（islam_prefs/{Email}.order）
 let accessReady = Promise.resolve();
 const videoCache = {};   // 課程 id → { 單元 id: YouTube ID }
 let courses = COURSES;   // 課程目錄：優先讀 Firestore 的 courses 集合，讀不到時用 data.js
@@ -126,27 +127,49 @@ async function initFirebase() {
 
 async function loadAccess() {
   joined = [];
+  myOrder = [];
   if (!isVerified()) return;
-  try {
-    const snap = await fb.getDocs(fb.collection(db, COL.enroll, user.email.toLowerCase(), 'courses'));
-    joined = snap.docs.map((d) => d.id);
-  } catch (e) {
-    console.error(e);
-  }
+  const email = user.email.toLowerCase();
+  await Promise.all([
+    fb.getDocs(fb.collection(db, COL.enroll, email, 'courses')).then((snap) => {
+      // 預設依加入時間排列
+      joined = snap.docs.map((d) => ({ id: d.id, at: d.data().joinedAt || 0 })).sort((a, b) => a.at - b.at).map((x) => x.id);
+    }).catch((e) => console.error(e)),
+    fb.getDoc(fb.doc(db, COL.prefs, email)).then((snap) => {
+      myOrder = snap.exists() ? (snap.data().order || []) : [];
+    }).catch((e) => console.error(e))
+  ]);
 }
 
-// 加入課程（每門課分開加入）
-async function joinCourse(c, btn) {
+// 加入課程（每門課分開加入）；stay = 留在原頁（例如從首頁快速加入）
+async function joinCourse(c, btn, stay = false) {
   btn.disabled = true;
   try {
     await fb.setDoc(fb.doc(db, COL.enroll, user.email.toLowerCase(), 'courses', c.id), { joinedAt: Date.now() });
     if (!joined.includes(c.id)) joined.push(c.id);
-    toast('已加入課程');
-    go('/learn/' + c.id);
+    toast('已加入我的學習區');
+    if (stay) render(); else go('/learn/' + c.id);
   } catch (err) {
     btn.disabled = false;
     toast('加入失敗：' + (err.code || err.message) + '（請確認已部署最新的 Firestore 規則）');
   }
+}
+
+// 從我的學習區移除（進度紀錄保留在瀏覽器）
+async function leaveCourse(c) {
+  await fb.deleteDoc(fb.doc(db, COL.enroll, user.email.toLowerCase(), 'courses', c.id));
+  joined = joined.filter((id) => id !== c.id);
+}
+
+// 我的學習區的課程：依學生自己排的順序，沒排過的放後面（依加入時間）
+function myCourses() {
+  const list = visibleCourses().filter((c) => hasJoined(c.id));
+  const rank = (c) => { const i = myOrder.indexOf(c.id); return i === -1 ? 1e6 + joined.indexOf(c.id) : i; };
+  return list.sort((a, b) => rank(a) - rank(b));
+}
+async function saveOrder(ids) {
+  myOrder = ids;
+  await fb.setDoc(fb.doc(db, COL.prefs, user.email.toLowerCase()), { order: ids, updatedAt: Date.now() });
 }
 
 // 從 Firestore 讀取課程目錄；資料庫還沒有課程時，沿用 data.js
@@ -197,7 +220,7 @@ function renderHeader() {
     '<nav>' +
     '<a href="#/">學習路線</a>' +
     (user
-      ? `<a href="#/my">我的課程</a>${isAdmin() ? '<a href="#/admin">管理</a>' : ''}<span class="muted small user-name" title="${esc(user.email)}">${esc(name)}</span><button class="link" id="logout">登出</button>`
+      ? `<a href="#/my">我的學習區</a>${isAdmin() ? '<a href="#/admin">管理</a>' : ''}<span class="muted small user-name" title="${esc(user.email)}">${esc(name)}</span><button class="link" id="logout">登出</button>`
       : '<a href="#/login" class="btn btn-sm">登入</a>') +
     '<button class="icon-btn" id="theme" aria-label="切換深淺色"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></button>' +
     '</nav></div>';
@@ -215,34 +238,67 @@ function renderHeader() {
 /* ---------------- 頁面 ---------------- */
 const pages = {};
 
-// 課程狀態（學習路線、我的課程共用）
+// 課程狀態（學習路線、我的學習區共用）
 function statusOf(c) {
   if (!isVerified() || !owns(c.id)) return '';
   const p = progress(c);
   return p === 100 ? '<span class="owned">✓ 已完成</span>' : `<span class="owned">✓ 已加入 · 進度 ${p}%</span>`;
 }
 
-// 首頁：學習路線（公開）
+// 首頁：學習路線（公開）＋搜尋與分類
+const categoriesOf = (list) => [...new Set(list.map((c) => c.category).filter(Boolean))];
 pages.home = (app) => {
   const path = listedCourses().filter((c) => !c.unlisted);
   const hidden = listedCourses().filter((c) => c.unlisted); // 管理者才看得到
+  const cats = categoriesOf(path);
+  let cat = '', q = '';
+  const joinBtn = (c) => {
+    if (!user) return `<a class="btn btn-ghost btn-sm" href="#/login?next=/" data-stop>＋ 加入學習區</a>`;
+    if (!isVerified() || hasJoined(c.id)) return '';
+    return `<button type="button" class="btn btn-ghost btn-sm" data-join="${esc(c.id)}">＋ 加入學習區</button>`;
+  };
   const row = (c, n) =>
     `<a class="card step" href="#/course/${c.id}">` +
     `<span class="step-no">${n ? n : '–'}</span>${thumb(c)}<div class="step-body">` +
-    `<span class="tag">${[n ? `第 ${n} 階段` : '', c.level, c.unlisted ? '不公開' : '', c.published === false ? '未上架' : ''].filter(Boolean).map(esc).join(' · ')}</span>` +
+    `<span class="tag">${[n ? `第 ${n} 階段` : '', c.category, c.level, c.unlisted ? '不公開' : '', c.published === false ? '未上架' : ''].filter(Boolean).map(esc).join(' · ')}</span>` +
     `<h3>${esc(c.title)}</h3><p class="muted small">${esc(c.subtitle || '')}</p>` +
-    `<p class="muted small">${lessonsOf(c).length} 個單元${minutesText(c)}</p><div>${statusOf(c) || '<span class="price free">免費</span>'}</div></div></a>`;
+    `<p class="muted small">${lessonsOf(c).length} 個單元${minutesText(c)}</p>` +
+    `<div class="step-foot">${statusOf(c) || '<span class="price free">免費</span>'}${joinBtn(c)}</div></div></a>`;
   app.innerHTML =
     '<section class="hero"><div class="container">' +
     `<h1>${esc(CONFIG.tagline || '一步一步，認識伊斯蘭')}</h1>` +
     `<p class="lead muted">${esc(CONFIG.intro || '從最基礎開始，依照學習路線循序漸進。所有課程免費，登入後加入課程即可觀看。')}</p>` +
+    '<input class="input search" id="q" type="search" placeholder="搜尋課程…" aria-label="搜尋課程" autocomplete="off" />' +
     '</div></section>' +
     '<section class="container"><h2>學習路線</h2>' +
-    (path.length ? '<div class="path">' + path.map((c, i) => row(c, i + 1)).join('') + '</div>' : '<p class="muted">課程準備中，敬請期待。</p>') +
+    (cats.length ? '<div class="chips" id="chips"><button class="chip" data-cat="">全部</button>' +
+      cats.map((c) => `<button class="chip" data-cat="${esc(c)}">${esc(c)}</button>`).join('') + '</div>' : '') +
+    '<div class="path" id="list"></div>' +
     (hidden.length ? '<h3 class="muted">不公開的課程（只有管理者看得到這個列表）</h3><div class="path">' + hidden.map((c) => row(c, 0)).join('') + '</div>' : '') +
     '</section>' +
     '<section class="container home-faq"><h2>常見問題</h2>' + faqList(SITE_PAGES.faq.slice(0, 5)) +
     '<p><a class="link" href="#/faq">查看全部常見問題 →</a></p></section>';
+
+  const listEl = app.querySelector('#list');
+  function draw() {
+    app.querySelectorAll('[data-cat]').forEach((b) => b.classList.toggle('active', b.dataset.cat === cat));
+    const words = q.split(/\s+/).filter(Boolean);
+    const shown = path.map((c, i) => [c, i + 1]).filter(([c]) =>
+      (!cat || c.category === cat) &&
+      words.every((w) => [c.title, c.subtitle, c.category, c.level, c.description, ...lessonsOf(c).map((l) => l.title)].join(' ').toLowerCase().includes(w)));
+    listEl.innerHTML = !path.length ? '<p class="muted">課程準備中，敬請期待。</p>'
+      : shown.length ? shown.map(([c, n]) => row(c, n)).join('') : '<p class="muted">找不到符合的課程。</p>';
+  }
+  const chips = app.querySelector('#chips');
+  if (chips) chips.onclick = (e) => { if (e.target.dataset.cat != null) { cat = e.target.dataset.cat; draw(); } };
+  app.querySelector('#q').oninput = (e) => { q = e.target.value.trim().toLowerCase(); draw(); };
+  // 卡片上的「加入學習區」：不要觸發卡片連結
+  app.onclick = (e) => {
+    const b = e.target.closest('[data-join]');
+    if (b) { e.preventDefault(); const c = findCourse(b.dataset.join); if (c) joinCourse(c, b, true); return; }
+    if (e.target.closest('[data-stop]')) { e.preventDefault(); go('/login?next=/'); }
+  };
+  draw();
 };
 
 // 課程介紹頁（公開）
@@ -265,7 +321,7 @@ pages.course = (app, id) => {
       '<p class="muted small">完成 Email 驗證後即可加入課程。</p>';
   } else {
     box = '<p><span class="price free">免費</span></p><button class="btn btn-block" id="join">＋ 加入課程</button>' +
-      '<p class="muted small">加入後這門課會出現在「我的課程」，可以隨時觀看。</p>';
+      '<p class="muted small">加入後這門課會出現在「我的學習區」，可以隨時觀看。</p>';
   }
   // 循序漸進：前一階段還沒完成時，溫和提醒（不強制）
   const hint = prev && !(owns(prev.id) && progress(prev) === 100)
@@ -382,21 +438,83 @@ pages.verify = (app) => {
   };
 };
 
-// 我的課程
+// 我的學習區：學生加入的課程，可以拖曳調整擺放順序
 pages.my = (app) => {
   if (!user) return go('/login?next=/my');
   if (!isVerified()) return pages.verify(app);
-  const list = visibleCourses().filter((c) => hasJoined(c.id) || isAdmin());
-  app.innerHTML = '<div class="container"><h1>我的課程</h1>' + (list.length
-    ? '<div class="grid">' + list.map((c) => {
-        const p = progress(c), n = c.unlisted ? 0 : stepOf(c);
-        return `<a class="card course" href="#/learn/${c.id}">${thumb(c)}<div class="pad">` +
-          (n ? `<span class="tag">第 ${n} 階段</span>` : '') + `<h3>${esc(c.title)}</h3>` +
-          `<div class="bar"><i style="width:${p}%"></i></div><p class="muted small">已完成 ${p}%</p></div></a>`;
-      }).join('') + '</div>'
-    : '<div class="card pad"><p>你還沒有加入任何課程。</p>' +
-      '<p class="muted small">到學習路線選擇課程，在課程頁按「加入課程」就能開始學習，建議從第 1 階段開始。</p>' +
-      '<a href="#/" class="btn btn-sm">查看學習路線</a></div>') + '</div>';
+  const list = myCourses();
+  app.innerHTML = '<div class="container"><div class="row-between"><h1>我的學習區</h1>' +
+    '<a class="btn btn-ghost btn-sm" href="#/">＋ 加入更多課程</a></div>' +
+    (list.length
+      ? '<p class="muted small">按住 ⠿ 拖曳卡片，或用 ↑ ↓ 調整順序，排成你想要的學習順序；順序會自動儲存。</p>' +
+        '<div class="grid my-grid" id="mine">' + list.map((c) => {
+          const p = progress(c), n = c.unlisted ? 0 : stepOf(c);
+          return `<div class="card course my-card" data-id="${esc(c.id)}">` +
+            `<div class="my-tools"><span class="drag-handle" title="拖曳調整順序" aria-label="拖曳調整順序">⠿</span>` +
+            '<button type="button" class="icon-btn" data-move="-1" aria-label="往前">↑</button>' +
+            '<button type="button" class="icon-btn" data-move="1" aria-label="往後">↓</button>' +
+            '<button type="button" class="icon-btn" data-leave aria-label="移出學習區" title="移出學習區">✕</button></div>' +
+            `<a href="#/learn/${c.id}" draggable="false">${thumb(c)}</a><div class="pad">` +
+            (n ? `<span class="tag">第 ${n} 階段</span>` : '') + `<h3><a href="#/learn/${c.id}" draggable="false">${esc(c.title)}</a></h3>` +
+            `<div class="bar"><i style="width:${p}%"></i></div><p class="muted small">已完成 ${p}%</p></div></div>`;
+        }).join('') + '</div>'
+      : '<div class="card pad"><p>你的學習區還沒有課程。</p>' +
+        '<p class="muted small">在學習路線的課程卡片按「＋ 加入學習區」，或到課程頁按「加入課程」。建議從第 1 階段開始。</p>' +
+        '<a href="#/" class="btn btn-sm">查看學習路線</a></div>') + '</div>';
+
+  const grid = app.querySelector('#mine');
+  if (!grid) return;
+  let saving = Promise.resolve();
+  const persist = () => {
+    const ids = [...grid.children].map((el) => el.dataset.id);
+    saving = saving.then(() => saveOrder(ids)).catch((err) => toast('順序儲存失敗：' + (err.code || err.message)));
+  };
+  // ↑ ↓、移出
+  grid.onclick = async (e) => {
+    const card = e.target.closest('.my-card');
+    if (!card) return;
+    const mv = e.target.closest('[data-move]');
+    if (mv) {
+      const sib = mv.dataset.move === '-1' ? card.previousElementSibling : card.nextElementSibling;
+      if (!sib) return;
+      if (mv.dataset.move === '-1') grid.insertBefore(card, sib); else grid.insertBefore(sib, card);
+      persist();
+      return;
+    }
+    if (e.target.closest('[data-leave]')) {
+      const c = findCourse(card.dataset.id);
+      if (!confirm(`把「${c.title}」移出學習區？（之後可以再加入，學習進度會保留）`)) return;
+      try { await leaveCourse(c); card.remove(); persist(); toast('已移出學習區'); if (!grid.children.length) pages.my(app); }
+      catch (err) { toast('移出失敗：' + (err.code || err.message) + '（請確認已部署最新的 Firestore 規則）'); }
+    }
+  };
+  // 拖曳（滑鼠與觸控都可以）：按住 ⠿ 移動
+  let dragging = null;
+  grid.addEventListener('pointerdown', (e) => {
+    const h = e.target.closest('.drag-handle');
+    if (!h) return;
+    e.preventDefault();
+    dragging = h.closest('.my-card');
+    dragging.classList.add('dragging');
+    h.setPointerCapture(e.pointerId);
+  });
+  grid.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    const over = document.elementFromPoint(e.clientX, e.clientY);
+    const target = over && over.closest('.my-card');
+    if (!target || target === dragging || target.parentNode !== grid) return;
+    const r = target.getBoundingClientRect();
+    const after = (e.clientY - r.top) / r.height > 0.5 || (Math.abs(e.clientY - (r.top + r.height / 2)) < r.height / 4 && (e.clientX - r.left) / r.width > 0.5);
+    grid.insertBefore(dragging, after ? target.nextSibling : target);
+  });
+  const end = () => {
+    if (!dragging) return;
+    dragging.classList.remove('dragging');
+    dragging = null;
+    persist();
+  };
+  grid.addEventListener('pointerup', end);
+  grid.addEventListener('pointercancel', end);
 };
 
 // 上課頁：從 Firestore 讀取不公開的 YouTube 影片 ID
@@ -556,7 +674,8 @@ pages.edit = async (app, id) => {
       '<div class="card pad"><h3>基本資訊</h3>' +
       field('課程名稱', 'title', c.title, 'required') +
       field('副標題', 'subtitle', c.subtitle) +
-      '<div class="two">' + field('程度', 'level', c.level) + field('講師', 'instructor', c.instructor) + '</div>' +
+      '<div class="two">' + field('分類 <span class="muted small">學生可以在首頁依分類篩選，例如：信仰、功修、生活</span>', 'category', c.category || '') + field('程度', 'level', c.level) + '</div>' +
+      '<div class="two">' + field('講師', 'instructor', c.instructor) + '<span></span></div>' +
       '<p class="muted small">學習路線的順序在「課程管理」用「↑ 往前」調整。</p>' +
       `<label class="check"><input type="checkbox" name="published" ${c.published !== false ? 'checked' : ''}/> 上架（取消勾選則只有管理者看得到）</label>` +
       `<label class="check"><input type="checkbox" name="unlisted" ${c.unlisted ? 'checked' : ''}/> 不公開：不列在學習路線，只有拿到課程連結的人才能進入</label>` +
@@ -605,6 +724,7 @@ pages.edit = async (app, id) => {
     if (!f) return;
     c.title = f.title.value.trim();
     c.subtitle = f.subtitle.value.trim();
+    c.category = f.category.value.trim();
     c.level = f.level.value.trim();
     c.instructor = f.instructor.value.trim();
     c.price = 0; // 所有課程免費
