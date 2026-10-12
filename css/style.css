@@ -285,3 +285,11 @@ table.orders th { font-size: 12px; color: var(--muted); background: var(--soft);
 .move-folder select { font: inherit; font-size: 13px; padding: 2px 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--card); color: var(--text); }
 #area.filtering .my-tools { visibility: hidden; }
 @media (max-width: 640px) { .folder-actions { margin-left: 0; } }
+
+/* 上課頁：我的筆記 */
+.my-notes { border-top: 1px solid var(--border); }
+.my-notes h3 { margin: 0; }
+.my-notes .row-between { margin-bottom: 10px; }
+.my-notes textarea { width: 100%; min-height: 160px; resize: vertical; line-height: 1.7; }
+.note-dot { margin-left: auto; font-size: 12px; }
+.side-l .note-dot + .muted { margin-left: 6px; }

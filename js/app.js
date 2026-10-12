@@ -7,7 +7,7 @@
  * 安全規則在 1.01academy repo 的 firestore.rules。
  */
 // 這個網站的 Firestore 集合名稱
-const COL = { courses: 'islam_courses', videos: 'islam_courseVideos', enroll: 'islam_enroll', prefs: 'islam_prefs', students: 'islam_students' };
+const COL = { courses: 'islam_courses', videos: 'islam_courseVideos', enroll: 'islam_enroll', prefs: 'islam_prefs', students: 'islam_students', notes: 'islam_notes' };
 const FIREBASE = 'https://www.gstatic.com/firebasejs/10.12.2/';
 const CONFIG = window.SITE_CONFIG || {};
 const configured = !!(CONFIG.firebaseConfig && CONFIG.firebaseConfig.apiKey);
@@ -292,7 +292,8 @@ pages.home = (app) => {
   const cats = categoriesOf(path);
   let cat = '', q = '';
   const joinBtn = (c) => {
-    if (!user) return `<a class="btn btn-ghost btn-sm" href="#/login?next=/" data-stop>＋ 加入學習區</a>`;
+    // 卡片本身是連結，裡面不能再放 <a>（瀏覽器會把卡片拆開），所以用按鈕
+    if (!user) return '<button type="button" class="btn btn-ghost btn-sm" data-stop>＋ 加入學習區</button>';
     if (!isVerified() || hasJoined(c.id)) return '';
     return `<button type="button" class="btn btn-ghost btn-sm" data-join="${esc(c.id)}">＋ 加入學習區</button>`;
   };
@@ -300,7 +301,7 @@ pages.home = (app) => {
     `<a class="card step" href="#/course/${c.id}">` +
     `<span class="step-no">${n ? n : '–'}</span>${thumb(c)}<div class="step-body">` +
     `<span class="tag">${[n ? `第 ${n} 階段` : '', c.category, c.level, c.unlisted ? '不公開' : '', c.published === false ? '未上架' : ''].filter(Boolean).map(esc).join(' · ')}</span>` +
-    `<h3>${esc(c.title)}</h3><p class="muted small">${esc(c.subtitle || '')}</p>` +
+    `<h3>${esc(c.title)}</h3>` + (c.subtitle ? `<p class="muted small">${esc(c.subtitle)}</p>` : '') +
     `<p class="muted small">${lessonsOf(c).length} 個單元${minutesText(c)}</p>` +
     `<div class="step-foot">${statusOf(c) || '<span class="price free">免費</span>'}${joinBtn(c)}</div></div></a>`;
   app.innerHTML =
@@ -519,7 +520,8 @@ pages.my = (app) => {
   };
 
   app.innerHTML = '<div class="container"><div class="row-between"><h1>我的學習區</h1>' +
-    '<span class="lesson-nav"><button type="button" class="btn btn-ghost btn-sm" id="newfolder">＋ 新增資料夾</button>' +
+    '<span class="lesson-nav"><button type="button" class="btn btn-ghost btn-sm" id="export-all" title="把所有課程的筆記下載成一個 Markdown 檔">⬇ 匯出全部筆記</button>' +
+    '<button type="button" class="btn btn-ghost btn-sm" id="newfolder">＋ 新增資料夾</button>' +
     '<a class="btn btn-ghost btn-sm" href="#/">＋ 加入更多課程</a></span></div>' +
     (all.length
       ? '<input class="input my-search" id="myq" type="search" placeholder="搜尋我的課程…" aria-label="搜尋我的課程" autocomplete="off"/>' +
@@ -555,6 +557,7 @@ pages.my = (app) => {
       .catch((err) => toast('儲存失敗：' + (err.code || err.message) + '（請確認已部署最新的 Firestore 規則）'));
   };
 
+  app.querySelector('#export-all').onclick = () => exportNotes(all, `my-notes-${fmtTime(Date.now()).slice(0, 10).replace(/\//g, '')}.md`);
   app.querySelector('#newfolder').onclick = () => {
     const name = (prompt('資料夾名稱') || '').trim().slice(0, 40);
     if (!name) return;
@@ -683,6 +686,80 @@ pages.my = (app) => {
   area.addEventListener('pointercancel', end);
 };
 
+/* ---------------- 我的筆記 ----------------
+ * islam_notes/{Email}/courses/{課程id} = { lessons: { 單元id: { text, updatedAt } }, updatedAt }
+ * 只有自己讀寫得到；換裝置登入也看得到 */
+const noteCache = {}; // 課程 id → { 單元id: { text, updatedAt } }
+async function loadNotes(courseId) {
+  if (noteCache[courseId]) return noteCache[courseId];
+  const snap = await fb.getDoc(fb.doc(db, COL.notes, user.email.toLowerCase(), 'courses', courseId));
+  noteCache[courseId] = snap.exists() ? (snap.data().lessons || {}) : {};
+  return noteCache[courseId];
+}
+// 打字停下 0.8 秒後自動儲存；換頁或關閉前把還沒存的內容存起來
+let pendingNote = null, noteTimer = 0;
+function queueNote(courseId, lessonId, text, onState) {
+  pendingNote = { courseId, lessonId, text, onState };
+  clearTimeout(noteTimer);
+  noteTimer = setTimeout(flushNote, 800);
+  onState('編輯中…');
+}
+async function flushNote() {
+  clearTimeout(noteTimer);
+  const n = pendingNote;
+  if (!n) return;
+  pendingNote = null;
+  const entry = { text: n.text, updatedAt: Date.now() };
+  (noteCache[n.courseId] = noteCache[n.courseId] || {})[n.lessonId] = entry;
+  try {
+    await fb.setDoc(fb.doc(db, COL.notes, user.email.toLowerCase(), 'courses', n.courseId),
+      { lessons: { [n.lessonId]: entry }, updatedAt: entry.updatedAt }, { merge: true });
+    n.onState('✓ 已儲存');
+  } catch (e) {
+    console.error(e);
+    n.onState('⚠ 儲存失敗');
+    toast('筆記儲存失敗：' + (e.code || e.message) + '（請確認已部署最新的 Firestore 規則）');
+  }
+}
+window.addEventListener('hashchange', flushNote);
+window.addEventListener('pagehide', flushNote);
+
+// 匯出 Markdown：一門課，或全部有筆記的課程（檔名用英數字，避免部分瀏覽器把中文檔名換成 download）
+function notesMarkdown(list) {
+  const out = [`# 我的筆記｜${CONFIG.siteName || '循序漸進學伊斯蘭'}`, '', `匯出時間：${fmtTime(Date.now())}`, ''];
+  list.forEach(({ course, lessons }) => {
+    const written = lessonsOf(course).filter((l) => (lessons[l.id] || {}).text);
+    if (!written.length) return;
+    out.push(`## ${course.title}`, '');
+    course.chapters.forEach((ch) => {
+      const ls = ch.lessons.filter((l) => (lessons[l.id] || {}).text);
+      if (!ls.length) return;
+      if (course.chapters.length > 1) out.push(`### ${ch.title}`, '');
+      ls.forEach((l) => {
+        out.push(`${course.chapters.length > 1 ? '####' : '###'} ${l.title}`, '', lessons[l.id].text.trim(), '',
+          `<sub>最後更新：${fmtTime(lessons[l.id].updatedAt || Date.now())}</sub>`, '');
+      });
+    });
+  });
+  return out.join('\n');
+}
+function downloadFile(name, text, type) {
+  const url = URL.createObjectURL(new Blob([text], { type }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.setAttribute('download', name);
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+const safeName = (t) => String(t).replace(/[\\/:*?"<>|\s]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'notes';
+async function exportNotes(courses, filename) {
+  await flushNote();
+  const list = [];
+  for (const course of courses) list.push({ course, lessons: await loadNotes(course.id).catch(() => ({})) });
+  if (!list.some(({ course, lessons }) => lessonsOf(course).some((l) => (lessons[l.id] || {}).text))) return toast('還沒有任何筆記可以匯出');
+  downloadFile(filename, notesMarkdown(list), 'text/markdown;charset=utf-8');
+}
+
 // 上課頁：從 Firestore 讀取不公開的 YouTube 影片 ID
 pages.learn = async (app, id, query, lessonId) => {
   const c = findCourse(id);
@@ -694,9 +771,9 @@ pages.learn = async (app, id, query, lessonId) => {
     return;
   }
   app.innerHTML = '<div class="container"><p class="muted">載入課程中…</p></div>';
-  let videos;
+  let videos, myNotes = {};
   try {
-    videos = await loadVideos(c.id);
+    [videos, myNotes] = await Promise.all([loadVideos(c.id), loadNotes(c.id).catch((e) => { console.error(e); return {}; })]);
   } catch (e) {
     console.error(e);
     app.innerHTML = '<div class="container narrow"><h1>無法載入課程</h1><div class="card pad"><p>你可能沒有觀看權限，或網路連線有問題。請重新整理，若仍無法觀看請聯繫我們。</p></div></div>';
@@ -723,6 +800,11 @@ pages.learn = async (app, id, query, lessonId) => {
     '<div class="pad share-warning">🔗 本課程為公開課程，<strong>歡迎分享</strong>給親友一起學習。</div>' +
     // 單元說明（在 data.js 每個單元的第 4 個欄位填寫）
     (cur.note ? `<div class="pad lesson-note"><h3>單元說明</h3><div>${linkify(esc(cur.note)).replace(/\n/g, '<br>')}</div></div>` : '') +
+    // 我的筆記（自動儲存，只有自己看得到）
+    '<div class="pad my-notes"><div class="row-between"><h3>📝 我的筆記</h3>' +
+    '<span class="lesson-nav"><span class="muted small" id="note-state"></span>' +
+    '<button type="button" class="btn btn-ghost btn-sm" id="note-export" title="把這門課的筆記下載成 Markdown 檔">⬇ 匯出 Markdown</button></span></div>' +
+    `<textarea class="input textarea" id="note" rows="7" placeholder="在這裡記下這個單元的重點…（自動儲存，只有你看得到）">${esc((myNotes[cur.id] || {}).text || '')}</textarea></div>` +
     '</div>' +
     `<aside class="side"><div class="pad"><strong>${esc(c.title)}</strong><div class="bar"><i style="width:${progress(c)}%"></i></div>` +
     `<span class="muted small">進度 ${progress(c)}%</span>` +
@@ -730,8 +812,18 @@ pages.learn = async (app, id, query, lessonId) => {
     c.chapters.map((ch) => `<div class="side-ch">${esc(ch.title)}</div>` + ch.lessons.map((l) => {
       const d = done.includes(l.id);
       return `<a class="side-l${l === cur ? ' active' : ''}" href="#/learn/${c.id}/${l.id}">` +
-        `<span class="dot${d ? ' done' : ''}">${d ? '✓' : ''}</span>${esc(l.title)}<span class="muted small">${clock(l.duration)}</span></a>`;
+        `<span class="dot${d ? ' done' : ''}">${d ? '✓' : ''}</span>${esc(l.title)}` +
+        ((myNotes[l.id] || {}).text ? '<span class="note-dot" title="有筆記">📝</span>' : '') + `<span class="muted small">${clock(l.duration)}</span></a>`;
     }).join('')).join('') + '</aside></div>';
+
+  const noteEl = app.querySelector('#note'), noteState = app.querySelector('#note-state');
+  const setState = (t) => { if (noteState.isConnected) noteState.textContent = t; };
+  noteEl.oninput = () => {
+    if (noteEl.value.length > 20000) { noteEl.value = noteEl.value.slice(0, 20000); toast('每個單元的筆記最多 20,000 字'); }
+    queueNote(c.id, cur.id, noteEl.value, setState);
+  };
+  noteEl.onblur = flushNote;
+  app.querySelector('#note-export').onclick = () => exportNotes([c], `notes-${safeName(c.id)}.md`);
 
   app.querySelector('#done').onclick = () => {
     setDone(c.id, cur.id, !isDone);
