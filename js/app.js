@@ -509,9 +509,9 @@ function renderHeader() {
     // 標誌：往上的階梯（循序漸進）
     `<a href="#/" class="logo"><span class="logo-mark" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18"><path fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" d="M4 19h5v-5h5V9h5V5"/></svg></span>${esc(CONFIG.siteName || '循序漸進學伊斯蘭')}</a>` +
     '<nav>' +
-    '<a href="#/">學習地圖</a><a href="#/articles">文章</a><a href="#/calendar">行事曆</a>' +
+    '<a href="#/">學習地圖</a><a href="#/articles">文章</a>' + (user ? '<a href="#/my">我的學習區</a>' : '') + '<a href="#/calendar">行事曆</a>' +
     (user
-      ? `<a href="#/my">我的學習區</a><a href="#/plan">我的課表</a>${isAdmin() ? '<a href="#/admin">管理</a>' : ''}<a class="muted small user-name" href="#/account" title="帳號設定（${esc(user.email)}）">${esc(name)}</a><button class="link" id="logout">登出</button>`
+      ? `<a href="#/plan">我的課表</a>${isAdmin() ? '<a href="#/admin">管理</a>' : ''}<a class="muted small user-name" href="#/account" title="帳號設定（${esc(user.email)}）">${esc(name)}</a><button class="link" id="logout">登出</button>`
       : '<a href="#/login" class="btn btn-sm">登入</a>') +
     '<button class="icon-btn" id="theme" aria-label="切換深淺色"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></button>' +
     '</nav></div>';
@@ -2260,7 +2260,6 @@ pages.learn = async (app, id, query, lessonId) => {
     '<div class="lesson-nav">' +
     (i > 0 ? `<a class="btn btn-ghost btn-sm" href="#/learn/${c.id}/${all[i - 1].id}">← 上一單元</a>` : '') +
     `<button class="btn btn-sm ${isDone ? 'btn-ghost' : ''}" id="done">${isDone ? '✓ 已完成' : '標記完成'}</button>` +
-    '<button class="btn btn-ghost btn-sm" id="to-session" title="把這一堂課排進我的課表">📖 加入我的課表</button>' +
     (i < all.length - 1 ? `<a class="btn btn-ghost btn-sm" href="#/learn/${c.id}/${all[i + 1].id}">下一單元 →</a>` : '') +
     '</div></div>' +
     (onlyArticle ? '' : youtubeEmbed(videos[cur.id])) +
@@ -2281,9 +2280,10 @@ pages.learn = async (app, id, query, lessonId) => {
     `<div class="pad side-order"><span class="muted small">單元順序</span>${orderSwitch(desc)}</div>` +
     orderedChapters(c, desc).map((ch) => `<div class="side-ch">${esc(ch.title)}</div>` + ch.lessons.map((l) => {
       const d = done.includes(l.id);
-      return `<a class="side-l${l === cur ? ' active' : ''}" href="#/learn/${c.id}/${l.id}">` +
+      return `<div class="side-row"><a class="side-l${l === cur ? ' active' : ''}" href="#/learn/${c.id}/${l.id}">` +
         `<span class="dot${d ? ' done' : ''}">${d ? '✓' : ''}</span>${esc(l.title)}` +
-        ((myNotes[l.id] || {}).text ? '<span class="note-dot" title="有筆記">📝</span>' : '') + `<span class="muted small">${lessonTime(l)}</span></a>`;
+        ((myNotes[l.id] || {}).text ? '<span class="note-dot" title="有筆記">📝</span>' : '') + `<span class="muted small">${lessonTime(l)}</span></a>` +
+        `<button type="button" class="side-check" data-unit="${esc(l.id)}" aria-pressed="false" title="加入我的課表" aria-label="加入我的課表"></button></div>`;
     }).join('')).join('') + '</aside></div>';
 
   const noteEl = app.querySelector('#note'), noteState = app.querySelector('#note-state');
@@ -2297,11 +2297,21 @@ pages.learn = async (app, id, query, lessonId) => {
   renderPosts(app.querySelector('#posts'), c);
 
   app.querySelectorAll('[data-order]').forEach((b) => { b.onclick = () => { setDesc(c.id, b.dataset.order === 'desc'); pages.learn(app, id, query, cur.id); }; });
-  // 單元課程：把這一堂課排進我的課表
-  const sBtn = app.querySelector('#to-session');
-  const showSession = () => { const it = mySessions.find((x) => x.c === c.id && x.l === cur.id); sBtn.textContent = it ? `📖 已排：${dateLabel(it.date)} ${it.time}` : '📖 加入我的課表'; };
-  loadSessions().then(() => { if (sBtn.isConnected) showSession(); });
-  sBtn.onclick = async () => { if (await editSession(c, cur)) showSession(); };
+  // 單元課程：右側每個單元旁的勾勾＝加入我的課表（勾選後設定時間；已勾選的點一下可修改或移除）
+  const showUnits = () => app.querySelectorAll('[data-unit]').forEach((b) => {
+    const it = mySessions.find((x) => x.c === c.id && x.l === b.dataset.unit);
+    b.setAttribute('aria-pressed', String(!!it));
+    b.title = it ? `已加入我的課表：${dateLabel(it.date)} ${it.time}（點一下修改或移除）` : '加入我的課表';
+    b.setAttribute('aria-label', b.title);
+  });
+  loadSessions().then(() => { if (app.isConnected) showUnits(); });
+  app.querySelector('aside.side').addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-unit]');
+    if (!b) return;
+    e.preventDefault();
+    const l = lessonsOf(c).find((x) => x.id === b.dataset.unit);
+    if (l && await editSession(c, l)) showUnits();
+  });
   app.querySelector('#done').onclick = () => {
     setDone(c.id, cur.id, !isDone);
     if (!isDone && progress(c) === 100) toast(nextCourse(c) ? '🎉 恭喜完成這個階段！可以繼續下一階段了' : '🎉 恭喜完成整門課程！');
