@@ -1442,6 +1442,7 @@ pages.verify = (app) => {
 };
 
 // 我的學習區：學生加入的課程，可以拖曳調整擺放順序
+const MY_VIEWS = { list: ['☰', '列表'], grid: ['▦', '方格'], compact: ['≡', '精簡'] };
 pages.my = (app) => {
   if (!user) return go('/login?next=/my');
   if (!isVerified()) return pages.verify(app);
@@ -1452,6 +1453,10 @@ pages.my = (app) => {
   const folders = myFolders.map((f) => ({ ...f, courses: (f.courses || []).filter((id) => has(id) && !filed.has(id) && filed.add(id)) }));
   const unfiled = all.filter((c) => !filed.has(c.id));
   const collapsedKey = 'isl_folds_' + user.uid;
+  // 排列方式：列表、方格、精簡（記在這台電腦）
+  const viewKey = 'isl_view_' + user.uid;
+  let view = 'list';
+  try { view = MY_VIEWS[localStorage.getItem(viewKey)] ? localStorage.getItem(viewKey) : 'list'; } catch (e) {}
   let collapsed = [];
   try { collapsed = JSON.parse(localStorage.getItem(collapsedKey)) || []; } catch (e) {}
 
@@ -1488,10 +1493,12 @@ pages.my = (app) => {
     '<a class="btn btn-ghost btn-sm" href="#/">＋ 加入更多課程</a>' +
     '<a class="btn btn-ghost btn-sm" href="#/account">⚙ 帳號設定</a></span></div>' +
     (all.length
-      ? '<input class="input my-search" id="myq" type="search" placeholder="搜尋我的課程…" aria-label="搜尋我的課程" autocomplete="off"/>' +
+      ? '<div class="my-bar"><input class="input my-search" id="myq" type="search" placeholder="搜尋我的課程…" aria-label="搜尋我的課程" autocomplete="off"/>' +
+        '<div class="view-switch" role="group" aria-label="排列方式">' +
+        Object.entries(MY_VIEWS).map(([k, v]) => `<button type="button" data-view="${k}" aria-pressed="${k === view}" title="${v[1]}">${v[0]} ${v[1]}</button>`).join('') + '</div></div>' +
         '<p class="muted small" id="myhint">按住 ⠿ 拖曳可調整順序、移進或移出資料夾；也可以按 ↑ ↓，或在課程的「📁」選擇資料夾。會自動儲存。</p>' +
         '<p class="muted" id="mynone" hidden>找不到符合的課程。</p>' +
-        '<div id="area">' + folders.map(folderBox).join('') +
+        `<div id="area" class="view-${view}">` + folders.map(folderBox).join('') +
         (folders.length ? '<h3 class="unfiled-title">未分類</h3>' : '') +
         `<div class="path my-list" data-list="">${unfiled.map((c) => card(c, '')).join('')}</div></div>`
       : '<div class="card pad"><p>你的學習區還沒有課程。</p>' +
@@ -1499,6 +1506,14 @@ pages.my = (app) => {
         '<a href="#/" class="btn btn-sm">查看學習地圖</a></div>') + '</div>';
 
   const area = app.querySelector('#area');
+  app.querySelectorAll('[data-view]').forEach((b) => {
+    b.onclick = () => {
+      view = b.dataset.view;
+      try { localStorage.setItem(viewKey, view); } catch (e) {}
+      area.className = 'view-' + view;
+      app.querySelectorAll('[data-view]').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+    };
+  });
   // 從畫面讀出目前的排列並儲存
   let saving = Promise.resolve();
   const snapshot = () => {
@@ -1623,7 +1638,9 @@ pages.my = (app) => {
     const target = over.closest('.my-card');
     if (target && target !== dragging && area.contains(target)) {
       const r = target.getBoundingClientRect();
-      if (e.clientY > r.top + r.height / 2) target.after(dragging); else target.before(dragging);
+      // 方格排列時看左右，其他看上下
+      const after = area.classList.contains('view-grid') ? e.clientX > r.left + r.width / 2 : e.clientY > r.top + r.height / 2;
+      if (after) target.after(dragging); else target.before(dragging);
       return;
     }
     const head = over.closest('.folder-head');
