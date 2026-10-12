@@ -885,6 +885,15 @@ function gcalEventOf(e) {
     ...(rrule(e) ? { recurrence: [rrule(e)] } : {})
   };
 }
+function gcalSessionOf(it, c, l) {
+  return {
+    id: gcalId('u' + it.c + '/' + it.l),
+    summary: `學習：${l.title}`,
+    description: `${c.title}\n上課：${location.origin + location.pathname}#/learn/${c.id}/${l.id}`,
+    start: gcalWhen(it.date, it.time), end: gcalWhen(it.date, addMinutes(it.time, it.minutes || 30)),
+    reminders: { useDefault: false, overrides: [{ method: 'popup', minutes: 10 }] }
+  };
+}
 function gcalStudyOf(c, sc) {
   const d = studyFirstDay(sc);
   return {
@@ -925,7 +934,8 @@ pages.calendar = async (app, ym) => {
   try { hidden = new Set(JSON.parse(localStorage.getItem('isl_cal_hidden')) || []); } catch (e) {}
   const saveHidden = () => { try { localStorage.setItem('isl_cal_hidden', JSON.stringify([...hidden])); } catch (e) {} };
   // 學生自己設定的學習時間
-  const hasStudy = !!user && Object.keys(mySchedules).some((id) => hasJoined(id) && findCourse(id));
+  if (isVerified()) await loadSessions();
+  const hasStudy = !!user && (Object.keys(mySchedules).some((id) => hasJoined(id) && findCourse(id)) || mySessions.some((it) => sessionRef(it)));
   try { if (localStorage.getItem('isl_show_study') === '0') hidden.add('我的學習'); } catch (e) {} // 舊設定
   const types = EVENT_TYPES.filter((t) => list.some((e) => e.type === t));
   const cities = CITIES.filter((c) => list.some((e) => e.city === c));
@@ -933,7 +943,7 @@ pages.calendar = async (app, ym) => {
     const first = new Date(y, m - 1, 1), days = new Date(y, m, 0).getDate();
     const from = `${y}-${pad2(m)}-01`, to = `${y}-${pad2(m)}-${pad2(days)}`;
     const shownList = list.filter((e) => !hidden.has(e.type || '其他') && (!city || e.city === city));
-    const study = hasStudy && !hidden.has('我的學習') && !city ? studyOccurrences(from, to) : [];
+    const study = hasStudy && !hidden.has('我的學習') && !city ? [...studyOccurrences(from, to), ...sessionOccurrences(from, to)] : [];
     const occ = [...shownList.flatMap((e) => occurrences(e, from, to)), ...study]
       .sort((a, b) => (a.start + (a.allDay ? '' : a.startTime || '')).localeCompare(b.start + (b.allDay ? '' : b.startTime || '')));
     const cells = [];
@@ -943,13 +953,13 @@ pages.calendar = async (app, ym) => {
       const evs = eventsOn(occ, day);
       cells.push(`<button type="button" class="cal-cell${day === todayStr() ? ' today' : ''}${day === picked ? ' picked' : ''}${evs.length ? ' has' : ''}" data-day="${day}">` +
         `<span class="cal-d">${d}</span>` +
-        evs.slice(0, 3).map((e) => `<span class="cal-ev ${e.study ? 'ev-study' : typeClass(e.type)}" title="${esc(e.title)}">${e.study ? '⏰ ' : ''}${e.allDay || !e.startTime || e.start !== day ? '' : esc(e.startTime) + ' '}${esc(e.title)}</span>`).join('') +
+        evs.slice(0, 3).map((e) => `<span class="cal-ev ${e.study ? 'ev-study' : typeClass(e.type)}" title="${esc(e.title)}">${e.session ? '📖 ' : e.study ? '⏰ ' : ''}${e.allDay || !e.startTime || e.start !== day ? '' : esc(e.startTime) + ' '}${esc(e.title)}</span>`).join('') +
         (evs.length > 3 ? `<span class="cal-more">還有 ${evs.length - 3} 個</span>` : '') +
         `<span class="cal-dots">${evs.slice(0, 4).map((e) => `<i class="${e.study ? 'ev-study' : typeClass(e.type)}"></i>`).join('')}</span></button>`);
     }
     // 這個月的活動：規律活動只列一次（這個月的第一次）
     const seen = new Set();
-    const monthEvents = occ.filter((e) => { const k = (e.study ? 'study:' : '') + e.id; return !seen.has(k) && seen.add(k); });
+    const monthEvents = occ.filter((e) => { const k = e.session ? 'sess:' + e.k : (e.study ? 'study:' : '') + e.id; return !seen.has(k) && seen.add(k); });
     const rowOf = (e) => (e.study ? studyRow(e) : eventRow(e));
     const dayEvents = picked ? eventsOn(occ, picked) : null;
     const filters =
@@ -1655,8 +1665,13 @@ function studyOccurrences(from, to) {
 }
 const studyRow = (o) => {
   const [, m, d] = parseDay(o.start);
+  if (o.session) {
+    return `<a class="card event-row" href="#/learn/${o.id}/${o.lid}"><span class="ev-date ev-study"><b>${d}</b><small>${m} 月</small></span>` +
+      `<span class="ev-main"><span class="tag">📖 單元課程</span><strong>${esc(o.title)}</strong>` +
+      `<span class="muted small">${esc(dateLabel(o.start))} ${o.startTime}–${o.endTime} · ${esc(o.course)}</span></span></a>`;
+  }
   return `<a class="card event-row" href="#/learn/${o.id}"><span class="ev-date ev-study"><b>${d}</b><small>${m} 月</small></span>` +
-    `<span class="ev-main"><span class="tag">⏰ 我的課表（每週固定）</span><strong>${esc(o.title)}</strong>` +
+    `<span class="ev-main"><span class="tag">⏰ 系列課程</span><strong>${esc(o.title)}</strong>` +
     `<span class="muted small">${esc(scheduleText(o.schedule))}</span></span></a>`;
 };
 function studyFirstDay(sc) {
@@ -1673,7 +1688,8 @@ function studyGoogleUrl(c, sc) {
 }
 function downloadStudyIcs(onlyId) {
   const items = Object.entries(mySchedules).filter(([cid, sc]) => (!onlyId || cid === onlyId) && findCourse(cid) && hasJoined(cid) && (sc.days || []).length);
-  if (!items.length) return toast('還沒有加入每週課表');
+  const units = onlyId ? [] : mySessions.map((it) => ({ it, r: sessionRef(it) })).filter(({ it, r }) => r && it.date >= todayStr());
+  if (!items.length && !units.length) return toast('我的課表還是空的');
   const escIcs = (t) => String(t || '').replace(/\\/g, '\\\\').replace(/[,;]/g, (m) => '\\' + m).replace(/\r?\n/g, '\\n');
   const stamp = new Date().toISOString().replace(/[-:]/g, '').slice(0, 15) + 'Z';
   const ev = items.flatMap(([cid, sc]) => {
@@ -1682,7 +1698,10 @@ function downloadStudyIcs(onlyId) {
       `DTSTART:${utcStamp(d, sc.time)}`, `DTEND:${utcStamp(d, addMinutes(sc.time, sc.minutes))}`, studyRule(sc),
       `SUMMARY:${escIcs('學習：' + c.title)}`, `DESCRIPTION:${escIcs('繼續上課：' + location.origin + location.pathname + '#/learn/' + cid)}`,
       `URL:${location.origin + location.pathname}#/learn/${cid}`, 'BEGIN:VALARM', 'ACTION:DISPLAY', 'TRIGGER:-PT10M', `DESCRIPTION:${escIcs(c.title)}`, 'END:VALARM', 'END:VEVENT'];
-  });
+  }).concat(units.flatMap(({ it, r }) => ['BEGIN:VEVENT', `UID:unit-${it.c}-${it.l}@islam.onepointzeroone.org`, `DTSTAMP:${stamp}`,
+    `DTSTART:${utcStamp(it.date, it.time)}`, `DTEND:${utcStamp(it.date, addMinutes(it.time, it.minutes || 30))}`,
+    `SUMMARY:${escIcs('學習：' + r.l.title)}`, `DESCRIPTION:${escIcs(r.c.title + '\n上課：' + location.origin + location.pathname + '#/learn/' + r.c.id + '/' + r.l.id)}`,
+    'BEGIN:VALARM', 'ACTION:DISPLAY', 'TRIGGER:-PT10M', `DESCRIPTION:${escIcs(r.l.title)}`, 'END:VALARM', 'END:VEVENT']));
   downloadFile(onlyId ? `study-${onlyId}.ics` : 'my-study-times.ics',
     ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//islam.onepointzeroone.org//study//ZH', ...ev, 'END:VCALENDAR'].join('\r\n'), 'text/calendar');
 }
@@ -1733,6 +1752,77 @@ function editSchedule(c) {
     document.addEventListener('keydown', onKey);
     document.body.appendChild(box);
     sum();
+  });
+}
+
+/* ---------------- 單元課程：單獨把某一堂課（單元）排進我的課表 ----------------
+ * islam_plans/{Email} = { plans: [{ id: 'main', name: '我的課表', items: [{ c: 課程id, l: 單元id, date, time, minutes }] }] }（只有自己讀寫） */
+let mySessions = [], sessionsFor = '';
+async function loadSessions(force = false) {
+  if (!isVerified()) return [];
+  const email = user.email.toLowerCase();
+  if (!force && sessionsFor === email) return mySessions;
+  try {
+    const snap = await fb.getDoc(fb.doc(db, COL.plans, email));
+    const items = snap.exists() ? (snap.data().plans || []).flatMap((p) => p.items || []) : [];
+    mySessions = items.filter((it) => it && it.c && it.l && /^\d{4}-\d{2}-\d{2}$/.test(it.date || ''));
+  } catch (e) { console.error(e); }
+  sessionsFor = email;
+  return mySessions;
+}
+async function saveSessions(list) {
+  await fb.setDoc(fb.doc(db, COL.plans, user.email.toLowerCase()), { plans: [{ id: 'main', name: '我的課表', items: list }], updatedAt: Date.now() });
+  mySessions = list;
+}
+const sessionRef = (it) => { const c = findCourse(it.c); const l = c && lessonsOf(c).find((x) => x.id === it.l); return c && l && hasJoined(c.id) ? { c, l } : null; };
+const sessionText = (it) => `${dateLabel(it.date)} ${it.time}–${addMinutes(it.time, it.minutes || 30)}`;
+function sessionOccurrences(from, to) {
+  return mySessions.map((it, k) => ({ it, k, r: sessionRef(it) })).filter(({ it, r }) => r && it.date >= from && it.date <= to)
+    .map(({ it, k, r }) => ({ id: r.c.id, lid: r.l.id, k, session: true, study: true, title: r.l.title, course: r.c.title, start: it.date, end: '', startTime: it.time, endTime: addMinutes(it.time, it.minutes || 30), type: '我的學習' }));
+}
+// 加入／修改單元課程：日期、時間、時長；回傳 true 表示有修改
+async function editSession(c, l) {
+  await loadSessions();
+  const k = mySessions.findIndex((it) => it.c === c.id && it.l === l.id);
+  const cur = k > -1 ? mySessions[k] : { c: c.id, l: l.id, date: todayStr(), time: '20:00', minutes: Math.max(15, Math.ceil((l.duration || 1800) / 60 / 5) * 5) };
+  return new Promise((resolve) => {
+    const mins = [10, 15, 20, 30, 45, 60, 90, 120].concat([cur.minutes]).filter((v, i, a) => a.indexOf(v) === i).sort((a, b) => a - b);
+    const box = document.createElement('div');
+    box.className = 'modal-backdrop';
+    box.innerHTML = '<form class="modal card pad" role="dialog" aria-modal="true" aria-labelledby="ss-title">' +
+      '<button type="button" class="modal-x" data-act="x" aria-label="關閉">✕</button>' +
+      `<h3 id="ss-title">📖 ${k > -1 ? '修改單元課程' : '加入單元課程'}</h3>` +
+      `<p class="muted small">「${esc(l.title)}」（${esc(c.title)}）要在什麼時候上？會顯示在我的課表和行事曆（只有你看得到）。</p>` +
+      `<div class="two"><label>日期<input class="input" type="date" name="date" value="${esc(cur.date)}" required/></label>` +
+      `<label>時間<input class="input" type="time" name="time" value="${esc(cur.time)}" required/></label></div>` +
+      `<label>預計<select class="input" name="minutes">${mins.map((m) => `<option value="${m}" ${m === cur.minutes ? 'selected' : ''}>${m} 分鐘</option>`).join('')}</select></label>` +
+      '<div class="lesson-nav"><button class="btn btn-sm">儲存</button>' +
+      (k > -1 ? `<a class="btn btn-ghost btn-sm" href="#/learn/${esc(c.id)}/${esc(l.id)}" data-act="go">▶ 去上課</a><button type="button" class="btn btn-ghost btn-sm" data-act="gcal">＋ 加入 Google 日曆</button><button type="button" class="btn btn-ghost btn-sm" data-act="del">從課表移除</button>` : '') +
+      '</div></form>';
+    const close = (v) => { box.remove(); document.removeEventListener('keydown', onKey); resolve(v); };
+    const onKey = (e) => { if (e.key === 'Escape') close(false); };
+    const save = async (list, msg) => {
+      try { await saveSessions(list); toast(msg); return true; }
+      catch (err) { toast('儲存失敗：' + (err.code || err.message) + '（請確認已部署最新的 Firestore 規則）'); return false; }
+    };
+    box.onclick = async (e) => {
+      const act = e.target === box ? 'x' : e.target.dataset.act;
+      if (act === 'x') return close(false);
+      if (act === 'go') { e.preventDefault(); close(false); return go(`/learn/${c.id}/${l.id}`); }
+      if (act === 'gcal') return addToGoogleCalendar([gcalSessionOf(mySessions[k], c, l)], null, e.target);
+      if (act === 'del' && confirm('把這堂課從我的課表移除？')) { if (await save(mySessions.filter((_, i) => i !== k), '已從我的課表移除')) close(true); }
+    };
+    box.onsubmit = async (e) => {
+      e.preventDefault();
+      const f = e.target;
+      if (!f.date.value || !f.time.value) return toast('請選擇日期和時間');
+      const v = { c: c.id, l: l.id, date: f.date.value, time: f.time.value, minutes: +f.minutes.value };
+      if (mySessions.length >= 500 && k < 0) return toast('單元課程最多 500 堂');
+      const list = k > -1 ? mySessions.map((x, i) => (i === k ? v : x)) : [...mySessions, v];
+      if (await save(list, k > -1 ? '已更新單元課程' : `已加入我的課表：${sessionText(v)}`)) close(true);
+    };
+    document.addEventListener('keydown', onKey);
+    document.body.appendChild(box);
   });
 }
 
@@ -2148,6 +2238,7 @@ pages.learn = async (app, id, query, lessonId) => {
     '<div class="lesson-nav">' +
     (i > 0 ? `<a class="btn btn-ghost btn-sm" href="#/learn/${c.id}/${all[i - 1].id}">← 上一單元</a>` : '') +
     `<button class="btn btn-sm ${isDone ? 'btn-ghost' : ''}" id="done">${isDone ? '✓ 已完成' : '標記完成'}</button>` +
+    '<button class="btn btn-ghost btn-sm" id="to-session" title="把這一堂課排進我的課表">📖 加入我的課表</button>' +
     (i < all.length - 1 ? `<a class="btn btn-ghost btn-sm" href="#/learn/${c.id}/${all[i + 1].id}">下一單元 →</a>` : '') +
     '</div></div>' +
     (onlyArticle ? '' : youtubeEmbed(videos[cur.id])) +
@@ -2184,6 +2275,11 @@ pages.learn = async (app, id, query, lessonId) => {
   renderPosts(app.querySelector('#posts'), c);
 
   app.querySelectorAll('[data-order]').forEach((b) => { b.onclick = () => { setDesc(c.id, b.dataset.order === 'desc'); pages.learn(app, id, query, cur.id); }; });
+  // 單元課程：把這一堂課排進我的課表
+  const sBtn = app.querySelector('#to-session');
+  const showSession = () => { const it = mySessions.find((x) => x.c === c.id && x.l === cur.id); sBtn.textContent = it ? `📖 已排：${dateLabel(it.date)} ${it.time}` : '📖 加入我的課表'; };
+  loadSessions().then(() => { if (sBtn.isConnected) showSession(); });
+  sBtn.onclick = async () => { if (await editSession(c, cur)) showSession(); };
   app.querySelector('#done').onclick = () => {
     setDone(c.id, cur.id, !isDone);
     if (!isDone && progress(c) === 100) toast(nextCourse(c) ? '🎉 恭喜完成這個階段！可以繼續下一階段了' : '🎉 恭喜完成整門課程！');
@@ -2192,9 +2288,9 @@ pages.learn = async (app, id, query, lessonId) => {
   };
 };
 
-/* ---------------- 我的課表：每週固定時間 + 課表行事曆（只有自己看得到） ----------------
+/* ---------------- 我的課表：系列課程 + 單元課程 + 課表行事曆（只有自己看得到） ----------------
  * 資料在 islam_prefs/{Email}.schedules（在課程按「⏰ 加入我的課表」設定） */
-// #/plan：我的課表（每週固定時間 + 只顯示自己課表的行事曆）
+// #/plan：我的課表（系列課程、單元課程，只顯示自己課表的行事曆）
 pages.plan = async (app, ym) => {
   if (!user) return go('/login?next=/plan');
   if (!isVerified()) return pages.verify(app);
@@ -2208,11 +2304,16 @@ pages.plan = async (app, ym) => {
   let weekStart = addDays(todayStr(), -now.getDay()); // 這週的星期日
   if (/^\d{4}-\d{2}$/.test(ym || '')) { view = 'month'; }
   let picked = '';
-  const has = Object.keys(mySchedules).some((id) => hasJoined(id) && findCourse(id));
+  await loadSessions(true);
+  if (!document.body.contains(app)) return;
+  const hasSeries = () => Object.keys(mySchedules).some((id) => hasJoined(id) && findCourse(id));
+  const hasUnits = () => mySessions.some((it) => sessionRef(it));
+  const allOcc = (from, to) => [...studyOccurrences(from, to), ...sessionOccurrences(from, to)];
+  const chipAttrs = (o, day) => (o.session ? `data-sid="${o.k}"` : `data-cid="${esc(o.id)}"`) + ` data-day="${day}"`;
   const toMin = (t) => { const [h, mm] = t.split(':').map(Number); return h * 60 + mm; };
   function monthHtml() {
     const first = new Date(y, m - 1, 1), days = new Date(y, m, 0).getDate();
-    const occ = studyOccurrences(`${y}-${pad2(m)}-01`, `${y}-${pad2(m)}-${pad2(days)}`).sort((a, b) => (a.start + a.startTime).localeCompare(b.start + b.startTime));
+    const occ = allOcc(`${y}-${pad2(m)}-01`, `${y}-${pad2(m)}-${pad2(days)}`).sort((a, b) => (a.start + a.startTime).localeCompare(b.start + b.startTime));
     const cells = [];
     for (let i = 0; i < first.getDay(); i++) cells.push('<div class="cal-cell blank"></div>');
     for (let d = 1; d <= days; d++) {
@@ -2220,20 +2321,20 @@ pages.plan = async (app, ym) => {
       const evs = occ.filter((o) => o.start === day);
       cells.push(`<button type="button" class="cal-cell${day === todayStr() ? ' today' : ''}${day === picked ? ' picked' : ''}${evs.length ? ' has' : ''}" data-day="${day}">` +
         `<span class="cal-d">${d}</span>` +
-        evs.slice(0, 3).map((o) => `<span class="cal-ev ev-study drag-ev" data-cid="${esc(o.id)}" data-day="${day}" title="${esc(o.title)}（點一下修改，可拖曳到其他天）">${esc(o.startTime)} ${esc(o.title)}</span>`).join('') +
+        evs.slice(0, 3).map((o) => `<span class="cal-ev ev-study drag-ev${o.session ? ' ev-unit' : ''}" ${chipAttrs(o, day)} title="${esc(o.title)}${o.session ? '（' + esc(o.course) + '）' : ''}（點一下修改，可拖曳到其他天）">${o.session ? '📖 ' : ''}${esc(o.startTime)} ${esc(o.title)}</span>`).join('') +
         (evs.length > 3 ? `<span class="cal-more">還有 ${evs.length - 3} 個</span>` : '') +
         `<span class="cal-dots">${evs.slice(0, 4).map(() => '<i class="ev-study"></i>').join('')}</span></button>`);
     }
     const dayList = picked ? occ.filter((o) => o.start === picked) : null;
     return '<div class="cal-grid">' + WEEK.map((w) => `<div class="cal-w">${w}</div>`).join('') + cells.join('') + '</div>' +
       (dayList ? `<h3>${esc(dateLabel(picked))}</h3>` + (dayList.length
-        ? '<div class="event-list">' + dayList.map((o) => `<a class="card event-row" href="#/learn/${o.id}"><span class="ev-date ev-study ev-time"><b>${o.startTime}</b><small>到 ${o.endTime}</small></span>` +
-            `<span class="ev-main"><strong>${esc(o.title)}</strong><span class="muted small">${esc(scheduleText(o.schedule))}</span></span></a>`).join('') + '</div>'
+        ? '<div class="event-list">' + dayList.map((o) => `<a class="card event-row" href="#/learn/${o.id}${o.session ? '/' + o.lid : ''}"><span class="ev-date ev-study ev-time"><b>${o.startTime}</b><small>到 ${o.endTime}</small></span>` +
+            `<span class="ev-main"><span class="tag">${o.session ? '📖 單元課程' : '⏰ 系列課程'}</span><strong>${esc(o.title)}</strong><span class="muted small">${o.session ? esc(o.course) : esc(scheduleText(o.schedule))}</span></span></a>`).join('') + '</div>'
         : '<p class="muted">這一天沒有課。</p>') : '');
   }
   function weekHtml() {
     const days = [...Array(7)].map((_, i) => addDays(weekStart, i));
-    const occ = studyOccurrences(days[0], days[6]);
+    const occ = allOcc(days[0], days[6]);
     // 時間軸範圍：依課表自動調整（至少 08:00–22:00）
     let lo = 8 * 60, hi = 22 * 60;
     occ.forEach((o) => { lo = Math.min(lo, toMin(o.startTime)); hi = Math.max(hi, toMin(o.endTime) || toMin(o.startTime) + 30); });
@@ -2251,8 +2352,8 @@ pages.plan = async (app, ym) => {
         (d === todayStr() && nowMin >= lo && nowMin <= hi ? `<i class="wk-now" style="top:${(nowMin - lo) / 60 * H}px"></i>` : '') +
         occ.filter((o) => o.start === d).map((o) => {
           const s = toMin(o.startTime), e = Math.max(s + 15, toMin(o.endTime) || s + 30);
-          return `<div class="wk-ev ev-study drag-ev" data-cid="${esc(o.id)}" data-day="${d}" style="top:${(s - lo) / 60 * H}px;height:${(e - s) / 60 * H - 2}px" title="${esc(o.title)} ${o.startTime}–${o.endTime}（點一下修改，可拖曳調整日期和時間）">` +
-            `<b>${esc(o.title)}</b><small>${o.startTime}–${o.endTime}</small></div>`;
+          return `<div class="wk-ev ev-study drag-ev${o.session ? ' ev-unit' : ''}" ${chipAttrs(o, d)} style="top:${(s - lo) / 60 * H}px;height:${(e - s) / 60 * H - 2}px" title="${esc(o.title)}${o.session ? '（' + esc(o.course) + '）' : ''} ${o.startTime}–${o.endTime}（點一下修改，可拖曳調整日期和時間）">` +
+            `<b>${o.session ? '📖 ' : ''}${esc(o.title)}</b><small>${o.startTime}–${o.endTime}${o.session ? ' · ' + esc(o.course) : ''}</small></div>`;
         }).join('') + '</div>').join('') + '</div></div>';
   }
   function draw() {
@@ -2261,20 +2362,26 @@ pages.plan = async (app, ym) => {
       : `${y} 年 ${m} 月`;
     const list = Object.entries(mySchedules).map(([cid, sc]) => ({ c: findCourse(cid), sc })).filter(({ c }) => c && hasJoined(c.id))
       .sort((a, b) => (Math.min(...a.sc.days) - Math.min(...b.sc.days)) || a.sc.time.localeCompare(b.sc.time));
+    const units = mySessions.map((it, k) => ({ it, k, r: sessionRef(it) })).filter(({ r }) => r)
+      .sort((a, b) => (a.it.date + a.it.time).localeCompare(b.it.date + b.it.time));
     app.innerHTML = '<div class="container calendar my-timetable">' +
       '<div class="row-between"><h1>📋 我的課表</h1><span class="lesson-nav"><a class="btn btn-ghost btn-sm" href="#/calendar">📅 全部活動行事曆</a>' +
-      (has ? '<button type="button" class="btn btn-sm" id="gcal-all">＋ 全部加入 Google 日曆</button>' : '') + '</span></div>' +
+      (hasSeries() || hasUnits() ? '<button type="button" class="btn btn-sm" id="gcal-all">＋ 全部加入 Google 日曆</button>' : '') + '</span></div>' +
       '<div class="cal-head"><button type="button" class="btn btn-ghost btn-sm" data-nav="-1" aria-label="上一頁">‹</button>' +
       `<h2>${title}</h2><button type="button" class="btn btn-ghost btn-sm" data-nav="1" aria-label="下一頁">›</button>` +
       '<button type="button" class="btn btn-ghost btn-sm" data-nav="0">今天</button>' +
       `<span class="view-switch cal-filters" role="group" aria-label="檢視"><button type="button" data-view="week" aria-pressed="${view === 'week'}">週</button><button type="button" data-view="month" aria-pressed="${view === 'month'}">月</button></span></div>` +
-      (has ? '' : '<p class="notice small">還沒有課表。到「我的學習區」或課程頁按「⏰ 加入我的課表」設定每週的學習時間，就會顯示在這裡。</p>') +
+      (hasSeries() || hasUnits() ? '' : '<p class="notice small">還沒有課表。整門課：到「我的學習區」或課程頁按「⏰ 加入我的課表」設定每週時間；單一堂課：在上課頁按「📖 加入我的課表」。</p>') +
       (view === 'week' ? weekHtml() : monthHtml()) +
-      '<h3 class="plan-h">每週固定時間</h3>' + (list.length
+      '<h3 class="plan-h">⏰ 系列課程 <span class="muted small">整門課每週固定上課</span></h3>' + (list.length
         ? '<div class="week-list">' + list.map(({ c, sc }) => `<div class="week-row"><i class="dot-sw ev-study"></i><a href="#/learn/${c.id}"><strong>${esc(c.title)}</strong></a>` +
-            `<span class="muted small">${esc(scheduleText(sc))}</span><button type="button" class="link small" data-week="${esc(c.id)}">修改</button></div>`).join('') + '</div>' +
-          '<p class="small"><button type="button" class="link small" id="week-ics">⬇ 下載日曆檔（Apple／Outlook）</button></p>'
-        : '<p class="muted small">在「我的學習區」或課程頁按「⏰ 加入我的課表」，就能設定每週固定的學習時間。</p>') +
+            `<span class="muted small">${esc(scheduleText(sc))}</span><button type="button" class="link small" data-week="${esc(c.id)}">修改</button></div>`).join('') + '</div>'
+        : '<p class="muted small">在「我的學習區」或課程頁按「⏰ 加入我的課表」，就能讓整門課每週固定上課。</p>') +
+      '<h3 class="plan-h">📖 單元課程 <span class="muted small">單獨排一堂課</span></h3>' + (units.length
+        ? '<div class="week-list">' + units.map(({ it, k, r }) => `<div class="week-row${it.date < todayStr() ? ' past' : ''}"><i class="dot-sw ev-study"></i><a href="#/learn/${r.c.id}/${r.l.id}"><strong>${esc(r.l.title)}</strong></a>` +
+            `<span class="muted small">${esc(sessionText(it))} · ${esc(r.c.title)}</span><button type="button" class="link small" data-sess="${k}">修改</button></div>`).join('') + '</div>'
+        : '<p class="muted small">在上課頁按「📖 加入我的課表」，就能把那一堂課單獨排進課表。</p>') +
+      (hasSeries() || hasUnits() ? '<p class="small"><button type="button" class="link small" id="week-ics">⬇ 下載日曆檔（Apple／Outlook）</button></p>' : '') +
       '</div>';
   }
   // 點課程：修改；拖曳課程：月曆改成另一個星期幾，週曆還可以上下調整時間（每 15 分鐘）
@@ -2284,7 +2391,7 @@ pages.plan = async (app, ym) => {
     const chip = e.target.closest('.drag-ev');
     if (!chip || e.button > 0) return;
     const r = chip.getBoundingClientRect();
-    drag = { chip, cid: chip.dataset.cid, from: chip.dataset.day, x: e.clientX, y: e.clientY, dy: e.clientY - r.top, moved: false, ghost: null };
+    drag = { chip, cid: chip.dataset.cid, sid: chip.dataset.sid, from: chip.dataset.day, x: e.clientX, y: e.clientY, dy: e.clientY - r.top, moved: false, ghost: null };
   });
   app.addEventListener('pointermove', (e) => {
     if (!drag) return;
@@ -2320,8 +2427,20 @@ pages.plan = async (app, ym) => {
     const cell = over && over.closest('[data-day].cal-cell');
     const col = over && over.closest('[data-col]');
     const toDay = cell ? cell.dataset.day : col ? col.dataset.col : '';
+    if (!toDay) return;
+    let newTime = '';
+    if (col) { const wk = app.querySelector('.wk'), lo = +wk.dataset.lo, H = +wk.dataset.h; const top = e.clientY - d.dy - col.getBoundingClientRect().top; const mins = Math.max(0, Math.min(24 * 60 - 15, Math.round((lo + top / H * 60) / 15) * 15)); newTime = `${pad2(Math.floor(mins / 60))}:${pad2(mins % 60)}`; }
+    if (d.sid != null) { // 單元課程：改日期（週曆也改時間）
+      const k = +d.sid, it = mySessions[k];
+      if (!it) return;
+      const v = { ...it, date: toDay, time: newTime || it.time };
+      if (v.date === it.date && v.time === it.time) return;
+      try { await saveSessions(mySessions.map((x, i) => (i === k ? v : x))); toast(`已改到 ${sessionText(v)}`); }
+      catch (err) { toast('儲存失敗：' + (err.code || err.message)); }
+      return draw();
+    }
     const sc = mySchedules[d.cid], c = findCourse(d.cid);
-    if (!toDay || !sc || !c) return;
+    if (!sc || !c) return;
     let time = sc.time;
     if (col) { // 週曆：依放開的位置算時間
       const wk = app.querySelector('.wk'), lo = +wk.dataset.lo, H = +wk.dataset.h;
@@ -2349,7 +2468,13 @@ pages.plan = async (app, ym) => {
   app.onclick = async (e) => {
     if (justDragged) return;
     const chip = e.target.closest('.drag-ev');
-    if (chip) { e.preventDefault(); const c = findCourse(chip.dataset.cid); if (c && await editSchedule(c)) draw(); return; }
+    if (chip) {
+      e.preventDefault();
+      if (chip.dataset.sid != null) { const it = mySessions[+chip.dataset.sid], r = it && sessionRef(it); if (r && await editSession(r.c, r.l)) draw(); return; }
+      const c = findCourse(chip.dataset.cid); if (c && await editSchedule(c)) draw(); return;
+    }
+    const sb = e.target.closest('[data-sess]');
+    if (sb) { const it = mySessions[+sb.dataset.sess], r = it && sessionRef(it); if (r && await editSession(r.c, r.l)) draw(); return; }
     const v = e.target.closest('[data-view]');
     if (v) { view = v.dataset.view; try { localStorage.setItem('isl_plan_view', view); } catch (err) {} picked = ''; return draw(); }
     const nav = e.target.closest('[data-nav]');
@@ -2367,8 +2492,10 @@ pages.plan = async (app, ym) => {
     if (wk) { const c = findCourse(wk.dataset.week); if (c && await editSchedule(c)) draw(); return; }
     if (e.target.id === 'week-ics') return downloadStudyIcs();
     if (e.target.id === 'gcal-all') {
-      const evs = Object.entries(mySchedules).map(([cid, sc]) => ({ c: findCourse(cid), sc }))
-        .filter(({ c, sc }) => c && hasJoined(c.id) && (sc.days || []).length).map(({ c, sc }) => gcalStudyOf(c, sc));
+      const evs = [...Object.entries(mySchedules).map(([cid, sc]) => ({ c: findCourse(cid), sc }))
+        .filter(({ c, sc }) => c && hasJoined(c.id) && (sc.days || []).length).map(({ c, sc }) => gcalStudyOf(c, sc)),
+        ...mySessions.map((it) => ({ it, r: sessionRef(it) })).filter(({ it, r }) => r && it.date >= todayStr()).map(({ it, r }) => gcalSessionOf(it, r.c, r.l))];
+      if (!evs.length) return toast('我的課表還是空的');
       addToGoogleCalendar(evs, null, e.target);
     }
   };
