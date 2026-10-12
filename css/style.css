@@ -342,3 +342,22 @@ table.orders th { font-size: 12px; color: var(--muted); background: var(--soft);
 .article-link-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 14px; border-top: 1px solid var(--border); }
 .article-link-bar .muted { flex: 1 1 260px; }
 .article-link:not(:has(iframe)) .article-link-bar { border-top: 0; }
+
+/* 獨立文章 */
+.blog-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px; margin-top: 14px; }
+.blog-card { display: flex; flex-direction: column; overflow: hidden; color: inherit; text-decoration: none; transition: transform .15s, box-shadow .15s; }
+.blog-card:hover { transform: translateY(-2px); }
+.blog-card h3 { margin: 6px 0; line-height: 1.45; }
+.blog-card .thumb { aspect-ratio: 16 / 9; }
+.blog-card .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.blog-page h1 { margin: 6px 0 10px; line-height: 1.35; }
+.blog-page .lesson-article { margin: 18px 0 28px; }
+.blog-cover { width: 100%; border-radius: 12px; display: block; margin: 10px 0; }
+#aq { margin-top: 8px; }
+.container.blog-page { max-width: 880px; }
+
+/* 課程介紹（可放圖片／GIF） */
+.course-intro img, .article img.media-img { max-width: 100%; height: auto; border-radius: 10px; display: block; margin: .8em 0; }
+.article img.media-img:not([src]) { min-height: 120px; width: 100%; background: var(--grid); }
+.article img.media-missing { display: none; }
+.media-tools { display: flex; align-items: center; gap: 10px; margin: 2px 0 6px; }
