@@ -288,7 +288,7 @@ function renderHeader() {
     '<nav>' +
     '<a href="#/">學習地圖</a>' +
     (user
-      ? `<a href="#/my">我的學習區</a>${isAdmin() ? '<a href="#/admin">管理</a>' : ''}<span class="muted small user-name" title="${esc(user.email)}">${esc(name)}</span><button class="link" id="logout">登出</button>`
+      ? `<a href="#/my">我的學習區</a>${isAdmin() ? '<a href="#/admin">管理</a>' : ''}<a class="muted small user-name" href="#/account" title="帳號設定（${esc(user.email)}）">${esc(name)}</a><button class="link" id="logout">登出</button>`
       : '<a href="#/login" class="btn btn-sm">登入</a>') +
     '<button class="icon-btn" id="theme" aria-label="切換深淺色"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></button>' +
     '</nav></div>';
@@ -654,7 +654,8 @@ pages.my = (app) => {
   app.innerHTML = '<div class="container"><div class="row-between"><h1>我的學習區</h1>' +
     '<span class="lesson-nav">' + exportMenu('export-all', '匯出全部筆記') +
     '<button type="button" class="btn btn-ghost btn-sm" id="newfolder">＋ 新增資料夾</button>' +
-    '<a class="btn btn-ghost btn-sm" href="#/">＋ 加入更多課程</a></span></div>' +
+    '<a class="btn btn-ghost btn-sm" href="#/">＋ 加入更多課程</a>' +
+    '<a class="btn btn-ghost btn-sm" href="#/account">⚙ 帳號設定</a></span></div>' +
     (all.length
       ? '<input class="input my-search" id="myq" type="search" placeholder="搜尋我的課程…" aria-label="搜尋我的課程" autocomplete="off"/>' +
         '<p class="muted small" id="myhint">按住 ⠿ 拖曳可調整順序、移進或移出資料夾；也可以按 ↑ ↓，或在課程的「📁」選擇資料夾。會自動儲存。</p>' +
@@ -1473,6 +1474,48 @@ function infoPage(app, title, body) {
     `<p class="muted small">最後更新：${esc(SITE_PAGES.updated)} · 聯絡我們：<a class="link" href="mailto:${esc(SITE_PAGES.email)}">${esc(SITE_PAGES.email)}</a></p></div>`;
 }
 const sections = (list) => list.map(([h, t]) => `<h2>${esc(h)}</h2><p>${paragraphs(t)}</p>`).join('');
+// 帳號設定：修改顯示名稱（交流區留言、學生名單會用這個名稱）
+pages.account = (app) => {
+  if (!user) return go('/login?next=/account');
+  app.innerHTML = '<div class="container narrow"><h1>帳號設定</h1><form class="card pad" id="acct">' +
+    `<label>Email<input class="input" value="${esc(user.email)}" disabled/></label>` +
+    `<label>名稱<input class="input" name="name" maxlength="40" required value="${esc(user.displayName || '')}" placeholder="例如：小明"/></label>` +
+    '<p class="muted small">名稱會顯示在網站右上角、心得分享與交流區的留言上（不會顯示 Email）。修改後，你以前的留言也會一起換成新名稱。</p>' +
+    '<button class="btn btn-block" id="save-name">儲存</button></form></div>';
+  const f = app.querySelector('#acct');
+  f.onsubmit = async (e) => {
+    e.preventDefault();
+    const name = f.name.value.trim().slice(0, 40);
+    if (!name) return toast('請輸入名稱');
+    const btn = f.querySelector('#save-name');
+    btn.disabled = true;
+    try {
+      await fb.updateProfile(auth.currentUser, { displayName: name });
+      user = auth.currentUser;
+      renderHeader();
+      if (isVerified()) {
+        syncStudent(true);
+        renamePosts(name);
+      }
+      toast('名稱已更新');
+    } catch (err) {
+      toast('更新失敗：' + (err.code || err.message));
+    } finally { btn.disabled = false; }
+  };
+};
+// 把自己以前在交流區的留言換成新名稱
+async function renamePosts(name) {
+  for (const c of courses) {
+    try {
+      const col = fb.collection(db, COL.posts, c.id, 'posts');
+      const snap = await fb.getDocs(fb.query(col, fb.where('uid', '==', user.uid)));
+      for (const d of snap.docs) {
+        if (d.data().uid === user.uid && d.data().name !== name) await fb.setDoc(fb.doc(db, COL.posts, c.id, 'posts', d.id), { name }, { merge: true });
+      }
+    } catch (e) { console.warn('留言名稱未更新', c.id, e); }
+  }
+}
+
 pages.faq = (app) => infoPage(app, '常見問題', faqList(SITE_PAGES.faq));
 pages.privacy = (app) => infoPage(app, '隱私權政策', sections(SITE_PAGES.privacy));
 pages.terms = (app) => infoPage(app, '服務條款', sections(SITE_PAGES.terms));
