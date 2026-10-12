@@ -7,7 +7,7 @@
  * 安全規則在 1.01academy repo 的 firestore.rules。
  */
 // 這個網站的 Firestore 集合名稱
-const COL = { courses: 'islam_courses', videos: 'islam_courseVideos', enroll: 'islam_enroll', prefs: 'islam_prefs', students: 'islam_students', notes: 'islam_notes' };
+const COL = { courses: 'islam_courses', videos: 'islam_courseVideos', enroll: 'islam_enroll', prefs: 'islam_prefs', students: 'islam_students', notes: 'islam_notes', posts: 'islam_posts' };
 const FIREBASE = 'https://www.gstatic.com/firebasejs/10.12.2/';
 const CONFIG = window.SITE_CONFIG || {};
 const configured = !!(CONFIG.firebaseConfig && CONFIG.firebaseConfig.apiKey);
@@ -380,11 +380,114 @@ pages.course = (app, id) => {
       `<div class="card chapter"><strong>${esc(ch.title)}</strong>` +
       ch.lessons.map((l) => `<div class="lesson"><span>${mine ? '▶' : '🔒'} ${esc(l.title)}</span><span class="muted small">${clock(l.duration)}</span></div>`).join('') +
       '</div>').join('') +
+    '<h2 id="talk">💬 心得分享與交流</h2><div class="talk" id="posts"></div>' +
     '</div>' +
     `<aside class="card buy">${thumb(c)}<div class="pad">${box}</div></aside></div>`;
   const joinBtn = app.querySelector('#join');
   if (joinBtn) joinBtn.onclick = () => joinCourse(c, joinBtn);
+  renderPosts(app.querySelector('#posts'), c);
 };
+
+/* ---------------- 心得分享與交流 ----------------
+ * islam_posts/{課程id}/posts/{留言id} = { uid, name, text, createdAt, replyTo, admin }
+ * 登入的人都看得到；加入課程的學生和管理者可以發言、回覆；作者可修改、刪除自己的留言，管理者可刪除任何留言 */
+const postName = () => (user.displayName || '').trim().slice(0, 40) || (user.email.split('@')[0].slice(0, 3) + '***');
+async function renderPosts(el, c) {
+  if (!el) return;
+  if (!user) {
+    el.innerHTML = `<div class="card pad muted small">登入後就能看到大家的學習心得，加入課程後也可以一起分享交流。<a class="link" href="#/login?next=/course/${c.id}">登入 →</a></div>`;
+    return;
+  }
+  if (!isVerified()) {
+    el.innerHTML = '<div class="card pad muted small">完成 Email 驗證後就能看到交流區。<a class="link" href="#/verify">前往驗證 →</a></div>';
+    return;
+  }
+  const canPost = isAdmin() || hasJoined(c.id);
+  const col = fb.collection(db, COL.posts, c.id, 'posts');
+  let posts = [], replying = '', editing = '';
+  el.innerHTML = '<p class="muted small">載入交流區…</p>';
+  try {
+    const snap = await fb.getDocs(col);
+    posts = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  } catch (e) {
+    console.error(e);
+    el.innerHTML = '<p class="muted small">交流區暫時無法載入，請稍後再試。</p>';
+    return;
+  }
+  const mineOf = (p) => p.uid === user.uid;
+  const box = (id, ph, val = '', btn = '發表') =>
+    `<form class="post-form" data-form="${id}"><textarea class="input textarea" rows="${id === 'new' ? 4 : 3}" maxlength="2000" placeholder="${ph}">${esc(val)}</textarea>` +
+    `<div class="post-actions">${id !== 'new' ? '<button type="button" class="btn btn-ghost btn-sm" data-act="cancel">取消</button>' : ''}<button class="btn btn-sm">${btn}</button></div></form>`;
+  const item = (p, isReply) => {
+    const acts = [];
+    if (!isReply && canPost) acts.push(`<button type="button" class="link small" data-act="reply" data-id="${p.id}">回覆</button>`);
+    if (mineOf(p)) acts.push(`<button type="button" class="link small" data-act="edit" data-id="${p.id}">編輯</button>`);
+    if (mineOf(p) || isAdmin()) acts.push(`<button type="button" class="link small" data-act="del" data-id="${p.id}">刪除</button>`);
+    return `<div class="post${isReply ? ' reply' : ''}${mineOf(p) ? ' mine' : ''}">` +
+      `<div class="post-meta"><strong>${esc(p.name || '學員')}</strong>${p.admin ? ' <span class="tag">管理者</span>' : ''}` +
+      `<span class="muted small">${fmtTime(p.createdAt)}${p.editedAt ? '（已編輯）' : ''}</span></div>` +
+      (editing === p.id ? box('edit:' + p.id, '', p.text, '儲存') : `<div class="post-text">${linkify(esc(p.text))}</div>`) +
+      (acts.length && editing !== p.id ? `<div class="post-acts">${acts.join('')}</div>` : '') + '</div>';
+  };
+  const draw = () => {
+    const tops = posts.filter((p) => !p.replyTo).sort((a, b) => b.createdAt - a.createdAt);
+    const repliesOf = (id) => posts.filter((p) => p.replyTo === id).sort((a, b) => a.createdAt - b.createdAt);
+    el.innerHTML =
+      (canPost ? box('new', '分享你的學習心得、感想或問題…（大家都看得到）')
+        : '<div class="card pad muted small">加入這門課程後，就可以分享心得、參與交流。</div>') +
+      (tops.length ? tops.map((p) => '<div class="card thread">' + item(p, false) +
+        repliesOf(p.id).map((r) => item(r, true)).join('') +
+        (replying === p.id ? '<div class="post reply">' + box('reply:' + p.id, '寫下你的回覆…', '', '回覆') + '</div>' : '') + '</div>').join('')
+        : '<p class="muted small">還沒有人分享，成為第一個分享心得的人吧！</p>');
+    const ta = replying ? el.querySelector(`[data-form="reply:${replying}"] textarea`) : editing ? el.querySelector(`[data-form="edit:${editing}"] textarea`) : null;
+    if (ta) ta.focus();
+  };
+  el.onclick = async (e) => {
+    const b = e.target.closest('[data-act]');
+    if (!b) return;
+    const act = b.dataset.act, id = b.dataset.id;
+    if (act === 'reply') { replying = replying === id ? '' : id; editing = ''; draw(); }
+    if (act === 'edit') { editing = id; replying = ''; draw(); }
+    if (act === 'cancel') { replying = editing = ''; draw(); }
+    if (act === 'del') {
+      if (!confirm('確定刪除這則留言？')) return;
+      // 管理者刪除主留言時，一併刪除底下的回覆
+      const ids = [id, ...(isAdmin() ? posts.filter((p) => p.replyTo === id).map((p) => p.id) : [])];
+      try {
+        for (const x of ids) await fb.deleteDoc(fb.doc(db, COL.posts, c.id, 'posts', x));
+        posts = posts.filter((p) => !ids.includes(p.id));
+        draw(); toast('已刪除');
+      } catch (err) { toast('刪除失敗：' + (err.code || err.message)); }
+    }
+  };
+  el.onsubmit = async (e) => {
+    e.preventDefault();
+    const form = e.target, kind = form.dataset.form, text = form.querySelector('textarea').value.trim();
+    if (!text) return toast('請輸入內容');
+    const btn = form.querySelector('button:not([type=button])');
+    btn.disabled = true;
+    try {
+      if (kind.startsWith('edit:')) {
+        const id = kind.slice(5), editedAt = Date.now();
+        await fb.setDoc(fb.doc(db, COL.posts, c.id, 'posts', id), { text, editedAt }, { merge: true });
+        Object.assign(posts.find((p) => p.id === id), { text, editedAt });
+        editing = '';
+      } else {
+        const p = { uid: user.uid, name: postName(), text, createdAt: Date.now(), replyTo: kind.startsWith('reply:') ? kind.slice(6) : '', admin: isAdmin() };
+        const id = newId('p');
+        await fb.setDoc(fb.doc(db, COL.posts, c.id, 'posts', id), p);
+        posts.push({ id, ...p });
+        replying = '';
+        toast(p.replyTo ? '已回覆' : '已發表');
+      }
+      draw();
+    } catch (err) {
+      btn.disabled = false;
+      toast('送出失敗：' + (err.code || err.message));
+    }
+  };
+  draw();
+}
 
 // 登入 / 註冊
 pages.login = (app, _, query) => {
@@ -858,6 +961,7 @@ pages.learn = async (app, id, query, lessonId) => {
     '<span class="lesson-nav"><span class="muted small" id="note-state"></span>' +
     exportMenu('note-export', '匯出筆記') + '</span></div>' +
     `<textarea class="input textarea" id="note" rows="7" placeholder="在這裡記下這個單元的重點…（自動儲存，只有你看得到）">${esc((myNotes[cur.id] || {}).text || '')}</textarea></div>` +
+    '<div class="pad"><h3>💬 心得分享與交流</h3><div class="talk" id="posts"></div></div>' +
     '</div>' +
     `<aside class="side"><div class="pad"><strong>${esc(c.title)}</strong><div class="bar"><i style="width:${progress(c)}%"></i></div>` +
     `<span class="muted small">進度 ${progress(c)}%</span>` +
@@ -877,6 +981,7 @@ pages.learn = async (app, id, query, lessonId) => {
   };
   noteEl.onblur = flushNote;
   bindExportMenu(app.querySelector('#note-export'), (fmt) => exportNotes([c], `notes-${safeName(c.id)}`, fmt));
+  renderPosts(app.querySelector('#posts'), c);
 
   app.querySelector('#done').onclick = () => {
     setDone(c.id, cur.id, !isDone);
