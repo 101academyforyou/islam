@@ -1794,10 +1794,20 @@ pages.my = (app) => {
     }
     if (sec && e.target.closest('[data-delfolder]')) {
       const f = folders.find((x) => x.id === sec.dataset.fid);
-      if (!confirm(`刪除資料夾「${f.name}」？裡面的課程會移回「未分類」，不會移出學習區。`)) return;
       const cur = snapshot();
-      const moved = (cur.folders.find((x) => x.id === f.id) || {}).courses || [];
-      saveFolders(cur.folders.filter((x) => x.id !== f.id), [...cur.order, ...moved]);
+      const inside = ((cur.folders.find((x) => x.id === f.id) || {}).courses || []).map(findCourse).filter(Boolean);
+      // 資料夾裡的課程一起移出學習區（學習進度、筆記保留，之後可以再加入）
+      if (!confirm(inside.length
+        ? `刪除資料夾「${f.name}」？\n\n裡面的 ${inside.length} 門課也會一起移出學習區：\n${inside.map((c) => '・' + c.title).join('\n')}\n\n學習進度和筆記會保留，之後可以再加入。`
+        : `刪除資料夾「${f.name}」？`)) return;
+      try {
+        for (const c of inside) { await leaveCourse(c); delete mySchedules[c.id]; }
+        saveFolders(cur.folders.filter((x) => x.id !== f.id), cur.order);
+        toast(inside.length ? `已刪除資料夾，並移出 ${inside.length} 門課` : '已刪除資料夾');
+      } catch (err) {
+        toast('刪除失敗：' + (err.code || err.message));
+        pages.my(app);
+      }
       return;
     }
     const cardEl = e.target.closest('.my-card');
