@@ -244,21 +244,26 @@ table.orders th { font-size: 12px; color: var(--muted); background: var(--soft);
 /* 學習路線卡片底部：狀態 + 加入學習區 */
 .step-foot { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .hero .search { max-width: 520px; margin: 20px auto 0; display: block; }
-/* 我的學習區：拖曳排序 */
-.my-card { position: relative; touch-action: auto; }
+/* 我的學習區：一列一門課，拖曳或 ↑ ↓ 排序 */
+.my-list .my-card { grid-template-columns: 36px 200px 1fr 36px; align-items: center; }
+.my-list .my-card:hover { transform: none; }
 .my-card a { color: inherit; text-decoration: none; }
-.my-tools { position: absolute; top: 8px; left: 8px; right: 8px; z-index: 2; display: flex; gap: 6px; }
-.my-tools .icon-btn { width: 30px; height: 30px; font-size: 14px; background: var(--card); opacity: .92; }
-.my-tools [data-leave] { margin-left: auto; }
-.drag-handle { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 8px; background: var(--card); border: 1px solid var(--border); cursor: grab; font-size: 18px; user-select: none; touch-action: none; }
+.my-tools { display: flex; flex-direction: column; gap: 6px; align-items: center; }
+.my-tools .icon-btn, .my-leave { width: 32px; height: 32px; font-size: 14px; }
+.my-leave { align-self: start; }
+.my-card .bar { max-width: 360px; margin: 8px 0 4px; }
+.drag-handle { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 8px; background: var(--card); border: 1px solid var(--border); cursor: grab; font-size: 18px; user-select: none; touch-action: none; }
 .my-card.dragging { opacity: .6; outline: 2px dashed var(--primary); outline-offset: 2px; }
 .my-card.dragging .drag-handle { cursor: grabbing; }
-/* 卡片橫向排列時用 ← →；手機單欄直向排列時用 ↑ ↓ */
-.my-tools .arr-v { display: none; }
-@media (max-width: 600px) {
-  .my-tools .arr-h { display: none; }
-  .my-tools .arr-v { display: inline; }
+.my-list .step:not(:last-child)::after { display: none; }
+@media (max-width: 640px) {
+  .my-list .my-card { grid-template-columns: 36px 1fr 32px; }
+  .my-list .my-card > a { display: none; }
 }
 
 /* 學生名單 */
 #sq { margin: 8px 0 16px; }
+
+/* 我的課程／學習區：搜尋 */
+.my-search { max-width: 420px; margin: 4px 0 8px; }
+.my-list.filtering .my-tools { visibility: hidden; }

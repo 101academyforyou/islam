@@ -480,17 +480,22 @@ pages.my = (app) => {
   app.innerHTML = '<div class="container"><div class="row-between"><h1>我的學習區</h1>' +
     '<a class="btn btn-ghost btn-sm" href="#/">＋ 加入更多課程</a></div>' +
     (list.length
-      ? '<p class="muted small">按住 ⠿ 拖曳卡片，或按箭頭往前、往後移動，排成你想要的學習順序；順序會自動儲存。</p>' +
-        '<div class="grid my-grid" id="mine">' + list.map((c) => {
+      ? '<input class="input my-search" id="myq" type="search" placeholder="搜尋我的課程…" aria-label="搜尋我的課程" autocomplete="off"/>' +
+        '<p class="muted small" id="myhint">按住 ⠿ 拖曳，或按 ↑ ↓ 調整順序，排成你想要的學習順序；順序會自動儲存。</p>' +
+        '<p class="muted" id="mynone" hidden>找不到符合的課程。</p>' +
+        '<div class="path my-list" id="mine">' + list.map((c) => {
           const p = progress(c), n = c.unlisted ? 0 : stepOf(c);
-          return `<div class="card course my-card" data-id="${esc(c.id)}">` +
-            `<div class="my-tools"><span class="drag-handle" title="拖曳調整順序" aria-label="拖曳調整順序">⠿</span>` +
-            '<button type="button" class="icon-btn" data-move="-1" aria-label="往前移" title="往前移"><span class="arr-h">←</span><span class="arr-v">↑</span></button>' +
-            '<button type="button" class="icon-btn" data-move="1" aria-label="往後移" title="往後移"><span class="arr-h">→</span><span class="arr-v">↓</span></button>' +
-            '<button type="button" class="icon-btn" data-leave aria-label="移出學習區" title="移出學習區">✕</button></div>' +
-            `<a href="#/learn/${c.id}" draggable="false">${thumb(c)}</a><div class="pad">` +
-            (n ? `<span class="tag">第 ${n} 階段</span>` : '') + `<h3><a href="#/learn/${c.id}" draggable="false">${esc(c.title)}</a></h3>` +
-            `<div class="bar"><i style="width:${p}%"></i></div><p class="muted small">已完成 ${p}%</p></div></div>`;
+          const hay = [c.title, c.subtitle, c.category, c.level, c.instructor, ...lessonsOf(c).map((l) => l.title)].join(' ').toLowerCase();
+          return `<div class="card step my-card" data-id="${esc(c.id)}" data-q="${esc(hay)}">` +
+            '<div class="my-tools"><span class="drag-handle" title="拖曳調整順序" aria-label="拖曳調整順序">⠿</span>' +
+            '<button type="button" class="icon-btn" data-move="-1" aria-label="往上移" title="往上移">↑</button>' +
+            '<button type="button" class="icon-btn" data-move="1" aria-label="往下移" title="往下移">↓</button></div>' +
+            `<a href="#/learn/${c.id}" draggable="false">${thumb(c)}</a><div class="step-body">` +
+            `<span class="tag">${[n ? `第 ${n} 階段` : '', c.category, c.level].filter(Boolean).map(esc).join(' · ')}</span>` +
+            `<h3><a href="#/learn/${c.id}" draggable="false">${esc(c.title)}</a></h3>` +
+            `<p class="muted small">${esc(c.subtitle || '')}</p><p class="muted small">${lessonsOf(c).length} 個單元${minutesText(c)}</p>` +
+            `<div class="bar"><i style="width:${p}%"></i></div><p class="small owned">${p === 100 ? '✓ 已完成' : `進度 ${p}%`}</p></div>` +
+            '<button type="button" class="icon-btn my-leave" data-leave aria-label="移出學習區" title="移出學習區">✕</button></div>';
         }).join('') + '</div>'
       : '<div class="card pad"><p>你的學習區還沒有課程。</p>' +
         '<p class="muted small">在學習路線的課程卡片按「＋ 加入學習區」，或到課程頁按「加入課程」。建議從第 1 階段開始。</p>' +
@@ -498,6 +503,21 @@ pages.my = (app) => {
 
   const grid = app.querySelector('#mine');
   if (!grid) return;
+  // 搜尋：只顯示符合的課程；搜尋時先隱藏排序按鈕，清除搜尋後才能調整順序
+  const hint = app.querySelector('#myhint'), none = app.querySelector('#mynone');
+  const hintText = hint.textContent;
+  app.querySelector('#myq').oninput = (e) => {
+    const words = e.target.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    let shown = 0;
+    [...grid.children].forEach((card) => {
+      const ok = words.every((w) => card.dataset.q.includes(w));
+      card.hidden = !ok;
+      if (ok) shown++;
+    });
+    grid.classList.toggle('filtering', words.length > 0);
+    none.hidden = shown > 0;
+    hint.textContent = words.length ? '搜尋中無法調整順序，清除搜尋後就能拖曳或按 ↑ ↓。' : hintText;
+  };
   let saving = Promise.resolve();
   const persist = () => {
     const ids = [...grid.children].map((el) => el.dataset.id);
