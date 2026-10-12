@@ -1815,9 +1815,11 @@ function sessionOccurrences(from, to) {
     .map(({ it, k, r }) => ({ id: r.c.id, lid: r.l.id, k, session: true, study: true, title: r.l.title, course: r.c.title, start: it.date, end: '', startTime: it.time, endTime: addMinutes(it.time, it.minutes || 30), type: '我的學習' }));
 }
 // 加入／修改單元課程：日期、時間、時長；回傳 true 表示有修改
-async function editSession(c, l, idx) {
+// addNew = true：一定是「再加一堂」（上課頁右側的勾勾），不會改到已經排好的
+async function editSession(c, l, idx, addNew = false) {
   await loadSessions();
-  const k = idx != null && mySessions[idx] && mySessions[idx].c === c.id && mySessions[idx].l === l.id ? idx : mySessions.findIndex((it) => it.c === c.id && it.l === l.id);
+  const k = addNew ? -1 : idx != null && mySessions[idx] && mySessions[idx].c === c.id && mySessions[idx].l === l.id ? idx : mySessions.findIndex((it) => it.c === c.id && it.l === l.id);
+  const already = mySessions.filter((it) => it.c === c.id && it.l === l.id).sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
   const cur = k > -1 ? mySessions[k] : { c: c.id, l: l.id, date: todayStr(), time: '20:00', minutes: Math.max(15, Math.ceil((l.duration || 1800) / 60 / 5) * 5) };
   return new Promise((resolve) => {
     const mins = [10, 15, 20, 30, 45, 60, 90, 120].concat([cur.minutes]).filter((v, i, a) => a.indexOf(v) === i).sort((a, b) => a - b);
@@ -1827,6 +1829,7 @@ async function editSession(c, l, idx) {
       '<button type="button" class="modal-x" data-act="x" aria-label="關閉">✕</button>' +
       `<h3 id="ss-title">📖 ${k > -1 ? '修改單元課程' : '加入單元課程'}</h3>` +
       `<p class="muted small">「${esc(l.title)}」（${esc(c.title)}）要在什麼時候上？會顯示在我的課表和行事曆（只有你看得到）。</p>` +
+      (k < 0 && already.length ? `<p class="small already">✓ 已經排了：${already.map((it) => esc(`${dateLabel(it.date)} ${it.time}`)).join('、')}<br><span class="muted">這次會再加一堂；要修改或移除已排的，請到「我的課表」點那一堂。</span></p>` : '') +
       `<div class="two"><label>日期<input class="input" type="date" name="date" value="${esc(cur.date)}" required/></label>` +
       `<label>時間<input class="input" type="time" name="time" value="${esc(cur.time)}" required/></label></div>` +
       `<label>預計<select class="input" name="minutes">${mins.map((m) => `<option value="${m}" ${m === cur.minutes ? 'selected' : ''}>${m} 分鐘</option>`).join('')}</select></label>` +
@@ -2312,9 +2315,10 @@ pages.learn = async (app, id, query, lessonId) => {
   app.querySelectorAll('[data-order]').forEach((b) => { b.onclick = () => { setDesc(c.id, b.dataset.order === 'desc'); pages.learn(app, id, query, cur.id); }; });
   // 單元課程：右側每個單元旁的勾勾＝加入我的課表（勾選後設定時間；已勾選的點一下可修改或移除）
   const showUnits = () => app.querySelectorAll('[data-unit]').forEach((b) => {
-    const it = mySessions.find((x) => x.c === c.id && x.l === b.dataset.unit);
-    b.setAttribute('aria-pressed', String(!!it));
-    b.title = it ? `已加入我的課表：${dateLabel(it.date)} ${it.time}（點一下修改或移除）` : '加入我的課表';
+    const its = mySessions.filter((x) => x.c === c.id && x.l === b.dataset.unit);
+    b.setAttribute('aria-pressed', String(its.length > 0));
+    b.dataset.count = its.length > 1 ? its.length : '';
+    b.title = its.length ? `已加入我的課表 ${its.length} 次（${its.map((it) => `${dateLabel(it.date)} ${it.time}`).join('、')}），點一下再加一堂` : '加入我的課表';
     b.setAttribute('aria-label', b.title);
   });
   loadSessions().then(() => { if (app.isConnected) showUnits(); });
@@ -2323,7 +2327,7 @@ pages.learn = async (app, id, query, lessonId) => {
     if (!b) return;
     e.preventDefault();
     const l = lessonsOf(c).find((x) => x.id === b.dataset.unit);
-    if (l && await editSession(c, l)) showUnits();
+    if (l && await editSession(c, l, null, true)) showUnits();
   });
   app.querySelector('#done').onclick = () => {
     setDone(c.id, cur.id, !isDone);
