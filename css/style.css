@@ -145,6 +145,10 @@ code { font-family: 'JetBrains Mono', monospace; font-size: .9em; background: va
 .notice-card { margin-bottom: 20px; border-color: var(--primary); }
 .admin-list { display: grid; gap: 14px; margin: 20px 0 40px; }
 .admin-row { display: grid; grid-template-columns: 200px 1fr; align-items: center; }
+.admin-list.sortable .admin-row { grid-template-columns: 52px 200px 1fr; }
+.admin-drag { display: flex; flex-direction: column; align-items: center; gap: 6px; padding-left: 12px; }
+.admin-no { font: 700 13px Inter, sans-serif; color: var(--muted); }
+.admin-row.dragging { opacity: .6; outline: 2px dashed var(--primary); outline-offset: 2px; }
 .admin-row .pad p { margin: 4px 0 10px; }
 .editor { max-width: 860px; padding-bottom: 48px; }
 .editor .card { margin-bottom: 18px; }
@@ -158,6 +162,8 @@ code { font-family: 'JetBrains Mono', monospace; font-size: .9em; background: va
 .editor-actions { display: flex; gap: 12px; justify-content: space-between; }
 @media (max-width: 640px) {
   .admin-row, .cover-edit { grid-template-columns: 1fr; }
+  .admin-list.sortable .admin-row { grid-template-columns: 1fr; position: relative; }
+  .admin-drag { position: absolute; z-index: 2; top: 10px; left: 10px; padding: 0; flex-direction: row; background: var(--card); border-radius: 10px; padding: 2px 8px 2px 2px; }
 }
 
 /* 常見問題與說明頁 */
@@ -461,3 +467,4 @@ table.orders th { font-size: 12px; color: var(--muted); background: var(--soft);
   .nav nav .btn, .nav nav .icon-btn { flex-shrink: 0; }
 }
 @media (max-width: 640px) { #area.view-grid .my-leave { top: 14px; right: 14px; width: 26px; height: 26px; font-size: 12px; } }
+.notify-card { margin-top: 18px; } .notify-who { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 8px 0; } .notify-card .lesson-nav { flex-wrap: wrap; }

@@ -923,6 +923,79 @@ pages.event = async (app, id) => {
   app.querySelector('#ics').onclick = () => downloadIcs(e);
 };
 
+// 活動通知信：由管理者自己的 Gmail 寄出（不是平台自動寄）。收件人放密件副本，每封最多 50 人
+const NOTIFY_BATCH = 50;
+function notifyText(e) {
+  const c = e.courseId ? findCourse(e.courseId) : null;
+  const pageUrl = location.origin + location.pathname + '#/event/' + e.id;
+  const when = e.repeat && REPEATS[e.repeat]
+    ? `${repeatText(e)}${e.allDay || !e.startTime ? '（全天）' : ` ${e.startTime}${e.endTime ? '–' + e.endTime : ''}`}`
+    : whenText(e) + (e.allDay || !e.startTime ? '（全天）' : '');
+  const desc = plainText(e.description);
+  const lines = [
+    '您好：', '',
+    `${CONFIG.siteName || '循序漸進學伊斯蘭'}誠摯邀請您參加「${e.title}」。`, '',
+    `■ 時間：${when}`,
+    placeText(e) ? `■ 地點：${placeText(e)}` : null,
+    e.url ? `■ 連結：${e.url}` : null,
+    c ? `■ 相關課程：${c.title}` : null,
+    '', desc ? (desc.length > 600 ? desc.slice(0, 600) + '…' : desc) : null, desc ? '' : null,
+    `活動詳情與加入行事曆：${pageUrl}`, '',
+    `${CONFIG.siteName || '循序漸進學伊斯蘭'} 敬上`,
+    '（如不想再收到活動通知，請直接回信告訴我們。）'
+  ].filter((l) => l !== null && l !== undefined);
+  return { subject: `【${e.type || '活動'}通知】${e.title}（${dateLabel(nextOccurrence(e)?.start || e.start)}）`, body: lines.join('\n').replace(/\n{3,}/g, '\n\n') };
+}
+async function openNotify(box, e) {
+  box.innerHTML = '<p class="muted small">讀取學生名單中…</p>';
+  let students = [];
+  try {
+    const snap = await fb.getDocs(fb.collection(db, COL.students));
+    students = snap.docs.map((d) => ({ email: d.id, ...d.data() })).filter((s) => /@/.test(s.email) && Object.keys(s.courses || {}).length);
+  } catch (err) {
+    box.innerHTML = `<p class="muted small">無法讀取學生名單：${esc(err.code || err.message)}</p>`;
+    return;
+  }
+  const c = e.courseId ? findCourse(e.courseId) : null;
+  const groups = { all: students.map((s) => s.email) };
+  if (c) groups.course = students.filter((s) => (s.courses || {})[c.id]).map((s) => s.email);
+  let who = c && groups.course.length ? 'course' : 'all';
+  const t = notifyText(e);
+  const from = CONFIG.notifyFrom || CONFIG.email || '';
+  function draw() {
+    const list = groups[who];
+    const batches = [];
+    for (let i = 0; i < list.length; i += NOTIFY_BATCH) batches.push(list.slice(i, i + NOTIFY_BATCH));
+    box.innerHTML = (e.published ? '' : '<p class="notice small">⚠ 這個活動還是草稿，學生點連結會看不到，建議先勾選「發布」。</p>') +
+      '<div class="notify-who">' +
+      `<label class="check"><input type="radio" name="who" value="all" ${who === 'all' ? 'checked' : ''}/> 所有學生（${groups.all.length} 人）</label>` +
+      (c ? `<label class="check"><input type="radio" name="who" value="course" ${who === 'course' ? 'checked' : ''}/> 加入「${esc(c.title)}」的學生（${groups.course.length} 人）</label>` : '') + '</div>' +
+      `<label>標題<input class="input" id="n-subject" value="${esc(t.subject)}"/></label>` +
+      `<label>內容 <span class="muted small">可以修改後再寄</span><textarea class="input textarea" id="n-body" rows="12">${esc(t.body)}</textarea></label>` +
+      (list.length
+        ? `<p class="muted small">收件人放在<strong>密件副本</strong>，學生之間看不到彼此的 Email。${batches.length > 1 ? `人數較多，分成 ${batches.length} 封，每封 ${NOTIFY_BATCH} 人，請每一封都按傳送。` : ''}Gmail 每天約可寄 500 人。</p>` +
+          '<div class="lesson-nav">' + batches.map((b, i) => `<button type="button" class="btn btn-sm" data-batch="${i}">✉ 開啟 Gmail${batches.length > 1 ? `（第 ${i + 1} 封，${b.length} 人）` : `（${b.length} 人）`}</button>`).join('') +
+          '<button type="button" class="btn btn-ghost btn-sm" id="n-copy-to">複製收件人</button><button type="button" class="btn btn-ghost btn-sm" id="n-copy-body">複製內容</button></div>'
+        : '<p class="muted">目前沒有可以寄送的學生。</p>');
+    box.querySelectorAll('[name=who]').forEach((r) => { r.onchange = () => { who = r.value; draw(); }; });
+    box.querySelectorAll('[data-batch]').forEach((b) => {
+      b.onclick = () => {
+        const bcc = batches[+b.dataset.batch].join(',');
+        const subject = box.querySelector('#n-subject').value, body = box.querySelector('#n-body').value;
+        const url = 'https://mail.google.com/mail/?view=cm&fs=1' + (from ? '&authuser=' + encodeURIComponent(from) : '') +
+          `&bcc=${encodeURIComponent(bcc)}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+        window.open(url, '_blank', 'noopener');
+        b.textContent = '✓ ' + b.textContent.replace(/^✓ /, '');
+      };
+    });
+    const copy = async (text, msg) => { try { await navigator.clipboard.writeText(text); toast(msg); } catch (err) { toast('無法複製，請手動選取'); } };
+    const ct = box.querySelector('#n-copy-to'), cb = box.querySelector('#n-copy-body');
+    if (ct) ct.onclick = () => copy(list.join(', '), `已複製 ${list.length} 個 Email`);
+    if (cb) cb.onclick = () => copy(box.querySelector('#n-subject').value + '\n\n' + box.querySelector('#n-body').value, '已複製標題和內容');
+  }
+  draw();
+}
+
 // 行事曆管理（管理者）
 pages.eventAdmin = async (app) => {
   app.innerHTML = '<div class="container"><p class="muted">載入中…</p></div>';
@@ -973,7 +1046,11 @@ pages.eventEdit = async (app, id, query = {}) => {
       `<details class="article-preview" id="epv" ${e.description ? '' : 'hidden'} open><summary class="small">預覽</summary><div class="article">${renderArticle(e.description)}</div></details></div>` +
       '<div class="editor-actions"><span class="autosave muted small" id="autosave">修改後會自動儲存</span>' +
       '<button class="btn" id="save">完成，查看活動 →</button>' +
-      '<button type="button" class="btn btn-ghost" id="del">刪除活動</button></div></form></div>';
+      '<button type="button" class="btn btn-ghost" id="del">刪除活動</button></div></form>' +
+      '<div class="card pad notify-card"><div class="row-between"><h3>📧 寄送活動通知</h3>' +
+      '<button type="button" class="btn btn-sm" id="notify-open">用 Gmail 寄送通知</button></div>' +
+      `<p class="muted small">會打開你的 Gmail（${esc(CONFIG.notifyFrom || CONFIG.email || '')}），收件人放在密件副本、標題和內容都幫你寫好，檢查後由你自己按「傳送」。</p>` +
+      '<div id="notify"></div></div></div>';
   }
   function collect() {
     const f = app.querySelector('#ee');
@@ -1030,6 +1107,11 @@ pages.eventEdit = async (app, id, query = {}) => {
       autosave(300);
     });
     bindMediaButtons(app);
+    app.querySelector('#notify-open').onclick = async () => {
+      const ok = await saveNow();
+      if (!ok) return toast('請先把活動資料填寫完整');
+      openNotify(app.querySelector('#notify'), { ...e });
+    };
     app.querySelector('#del').onclick = async () => {
       if (!confirm(`確定刪除「${e.title || '這個活動'}」？此動作無法復原。`)) return;
       clearTimeout(timer); timer = 0;
@@ -1916,14 +1998,18 @@ pages.admin = async (app, id, query, sub) => {
     (coursesFromDb ? '' :
       '<div class="card pad notice-card"><strong>第一次使用：請先匯入課程</strong><p class="muted small">目前的課程資料來自網站內建檔案。按下面的按鈕把課程匯入資料庫後，就能在網站上直接編輯。</p>' +
       '<button class="btn btn-sm" id="import">匯入現有課程到資料庫</button></div>') +
-    '<div class="admin-list">' + courses.map((c, i) =>
-      `<div class="card admin-row">${thumb(c)}<div class="pad"><strong>${esc(c.title)}</strong>` +
-      `<p class="muted small">${esc(c.category || '')} · ${lessonsOf(c).length} 個單元 · ${c.published === false ? '<span class="tag">未上架</span>' : '已上架'}` +
+    (coursesFromDb && courses.length > 1 ? '<p class="muted small">按住 ⠿ 拖曳可以調整課程順序（= 學習地圖的階段順序），放開後自動儲存；也可以按 ↑ ↓。</p>' : '') +
+    `<div class="admin-list${coursesFromDb ? ' sortable' : ''}">` + courses.map((c, i) =>
+      `<div class="card admin-row" data-id="${esc(c.id)}">` +
+      (coursesFromDb ? `<div class="admin-drag"><span class="drag-handle" title="拖曳調整順序" aria-label="拖曳">⠿</span><span class="admin-no">${i + 1}</span></div>` : '') +
+      `${thumb(c)}<div class="pad"><strong>${esc(c.title)}</strong>` +
+      `<p class="muted small">${[esc(c.category || ''), lessonsOf(c).length + ' 個單元', c.published === false ? '<span class="tag">未上架</span>' : '已上架'].filter(Boolean).join(' · ')}` +
       (c.unlisted ? ' · <span class="tag">不公開</span>' : '') +
       '</p>' +
       `<div class="lesson-nav">${coursesFromDb ? `<a class="btn btn-sm" href="#/admin/${c.id}">編輯</a>` : ''}` +
       `<a class="btn btn-ghost btn-sm" href="#/course/${c.id}">查看</a>` +
       (coursesFromDb && i > 0 ? `<button class="btn btn-ghost btn-sm" data-up="${i}">↑ 往前</button>` : '') +
+      (coursesFromDb && i < courses.length - 1 ? `<button class="btn btn-ghost btn-sm" data-down="${i}">↓ 往後</button>` : '') +
       '</div></div></div>').join('') + '</div></div>';
 
   const imp = app.querySelector('#import');
@@ -1938,16 +2024,62 @@ pages.admin = async (app, id, query, sub) => {
       pages.admin(app);
     } catch (e) { console.error(e); imp.disabled = false; imp.textContent = '匯入現有課程到資料庫'; toast('匯入失敗：' + (e.code || e.message) + '（請確認已更新 Firestore 規則）'); }
   };
-  app.onclick = async (e) => {
-    const up = e.target.dataset && e.target.dataset.up;
-    if (up == null) return;
-    const i = +up;
-    [courses[i - 1], courses[i]] = [courses[i], courses[i - 1]];
+  // 依新的順序儲存（只寫入順序有變的課程）
+  const saveOrder = async (ids) => {
+    const byId = Object.fromEntries(courses.map((c) => [c.id, c]));
+    const next = ids.map((id) => byId[id]).filter(Boolean);
+    const changed = next.filter((c, k) => c.order !== k);
+    next.forEach((c, k) => { c.order = k; });
+    courses = next;
     try {
-      await Promise.all(courses.map((c, k) => fb.setDoc(fb.doc(db, COL.courses, c.id), { order: k }, { merge: true })));
-      pages.admin(app);
+      await Promise.all(changed.map((c) => fb.setDoc(fb.doc(db, COL.courses, c.id), { order: c.order }, { merge: true })));
+      if (changed.length) toast('已更新課程順序');
     } catch (err) { toast('排序失敗：' + (err.code || err.message)); }
+    pages.admin(app);
   };
+  app.onclick = async (e) => {
+    const b = e.target.closest('[data-up],[data-down]');
+    if (!b) return;
+    const ids = courses.map((c) => c.id);
+    const i = +(b.dataset.up ?? b.dataset.down), j = b.dataset.up != null ? i - 1 : i + 1;
+    [ids[i], ids[j]] = [ids[j], ids[i]];
+    saveOrder(ids);
+  };
+  // 拖曳排序
+  const list = app.querySelector('.admin-list.sortable');
+  if (!list) return;
+  let dragging = null, startIds = '';
+  list.addEventListener('pointerdown', (e) => {
+    const h = e.target.closest('.drag-handle');
+    if (!h) return;
+    e.preventDefault();
+    dragging = h.closest('.admin-row');
+    startIds = [...list.children].map((x) => x.dataset.id).join();
+    dragging.classList.add('dragging');
+    h.setPointerCapture(e.pointerId);
+  });
+  list.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    const over = document.elementFromPoint(e.clientX, e.clientY);
+    const target = over && over.closest('.admin-row');
+    if (!target || target === dragging || !list.contains(target)) {
+      // 拖到畫面邊緣時自動捲動
+      if (e.clientY < 70) scrollBy(0, -12); else if (e.clientY > innerHeight - 50) scrollBy(0, 12);
+      return;
+    }
+    const r = target.getBoundingClientRect();
+    if (e.clientY > r.top + r.height / 2) target.after(dragging); else target.before(dragging);
+    [...list.children].forEach((row, k) => { const n = row.querySelector('.admin-no'); if (n) n.textContent = k + 1; });
+  });
+  const end = () => {
+    if (!dragging) return;
+    dragging.classList.remove('dragging');
+    dragging = null;
+    const ids = [...list.children].map((x) => x.dataset.id);
+    if (ids.join() !== startIds) saveOrder(ids);
+  };
+  list.addEventListener('pointerup', end);
+  list.addEventListener('pointercancel', end);
 };
 
 const adminTabs = (cur) => '<div class="chips admin-tabs">' +
