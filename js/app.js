@@ -7,7 +7,7 @@
  * 安全規則在 1.01academy repo 的 firestore.rules。
  */
 // 這個網站的 Firestore 集合名稱
-const COL = { courses: 'islam_courses', videos: 'islam_courseVideos', enroll: 'islam_enroll', prefs: 'islam_prefs', students: 'islam_students', notes: 'islam_notes', posts: 'islam_posts', counts: 'islam_counts', counted: 'islam_counted', stats: 'islam_stats', articles: 'islam_articles', blog: 'islam_blog' };
+const COL = { courses: 'islam_courses', videos: 'islam_courseVideos', enroll: 'islam_enroll', prefs: 'islam_prefs', students: 'islam_students', notes: 'islam_notes', posts: 'islam_posts', counts: 'islam_counts', counted: 'islam_counted', stats: 'islam_stats', articles: 'islam_articles', blog: 'islam_blog', media: 'islam_media' };
 const FIREBASE = 'https://www.gstatic.com/firebasejs/10.12.2/';
 const CONFIG = window.SITE_CONFIG || {};
 const configured = !!(CONFIG.firebaseConfig && CONFIG.firebaseConfig.apiKey);
@@ -88,7 +88,8 @@ function renderArticle(text) {
   const inline = (t) => {
     const keep = [];
     const hold = (html) => `\u0000${keep.push(html) - 1}\u0000`;
-    t = t.replace(/!\[([^\]]*)\]\((https?:\/\/[^\s)]+)\)/g, (_, alt, u) => hold(`<img src="${u}" alt="${alt}" loading="lazy"/>`))
+    t = t.replace(/!\[([^\]]*)\]\(media:([\w-]+)\)/g, (_, alt, id) => hold(`<img class="media-img" data-media="${id}" alt="${alt}"/>`))
+      .replace(/!\[([^\]]*)\]\((https?:\/\/[^\s)]+)\)/g, (_, alt, u) => hold(`<img src="${u}" alt="${alt}" loading="lazy"/>`))
       .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (_, label, u) => hold(`<a class="link" href="${u}" target="_blank" rel="noopener">${label}</a>`))
       .replace(/https?:\/\/[^\s<]+/g, (u) => hold(`<a class="link" href="${u}" target="_blank" rel="noopener">${u}</a>`))
       .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
@@ -118,6 +119,87 @@ function renderArticle(text) {
   });
   flushPara(); flushList();
   return out.join('');
+}
+
+// 上傳的圖片／GIF（islam_media）：畫面出現 <img data-media> 時自動載入
+const mediaCache = {};
+const loadMedia = (id) => mediaCache[id] || (mediaCache[id] = fb.getDoc(fb.doc(db, COL.media, id))
+  .then((snap) => (snap.exists() ? snap.data().data : ''))
+  .catch((e) => { console.error(e); delete mediaCache[id]; return ''; }));
+function hydrateMedia(root) {
+  if (!fb || !root.querySelectorAll) return;
+  const imgs = [...root.querySelectorAll('img[data-media]:not([src])')];
+  if (root.matches && root.matches('img[data-media]:not([src])')) imgs.push(root);
+  imgs.forEach((img) => {
+    loadMedia(img.dataset.media).then((src) => { if (src) img.src = src; else img.classList.add('media-missing'); });
+  });
+}
+new MutationObserver((list) => list.forEach((m) => m.addedNodes.forEach((n) => { if (n.nodeType === 1) hydrateMedia(n); })))
+  .observe(document.documentElement, { childList: true, subtree: true });
+
+// 上傳圖片：一般圖片縮到寬 1280 以內、壓縮成 JPEG；GIF 保留動畫（原檔要小於約 700KB）
+const MAX_GIF = 700 * 1024;
+async function uploadMedia(file) {
+  let data, type;
+  if (file.type === 'image/gif') {
+    if (file.size > MAX_GIF) throw new Error(`GIF 檔案太大（${Math.round(file.size / 1024)}KB），上限約 700KB，請先壓縮（例如用 ezgif.com）或改用圖片網址`);
+    data = await new Promise((ok, fail) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = fail; r.readAsDataURL(file); });
+    type = 'image/gif';
+  } else {
+    const img = await createImageBitmap(file);
+    const scale = Math.min(1, 1280 / img.width);
+    const canvas = Object.assign(document.createElement('canvas'), { width: Math.round(img.width * scale), height: Math.round(img.height * scale) });
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, canvas.width, canvas.height); // 透明背景改成白色
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    let q = 0.85;
+    data = canvas.toDataURL('image/jpeg', q);
+    while (data.length > 900000 && q > 0.35) { q -= 0.1; data = canvas.toDataURL('image/jpeg', q); }
+    if (data.length > 900000) throw new Error('圖片太大，請換一張較小的圖片');
+    type = 'image/jpeg';
+  }
+  const id = newId('m');
+  await fb.setDoc(fb.doc(db, COL.media, id), { data, type, createdAt: Date.now() });
+  mediaCache[id] = Promise.resolve(data);
+  return id;
+}
+// 「插入圖片／GIF」按鈕：上傳後把 ![](media:id) 插到游標位置
+function mediaButton(target) {
+  return `<span class="media-tools"><button type="button" class="btn btn-ghost btn-sm" data-upload="${target}">🖼 插入圖片／GIF</button>` +
+    `<input type="file" accept="image/*" multiple hidden data-upload-file="${target}"/><span class="muted small" data-upload-state="${target}"></span></span>`;
+}
+function bindMediaButtons(root, onInserted) {
+  root.querySelectorAll('[data-upload]').forEach((btn) => {
+    const key = btn.dataset.upload;
+    const input = root.querySelector(`[data-upload-file="${key}"]`);
+    const state = root.querySelector(`[data-upload-state="${key}"]`);
+    btn.onclick = () => input.click();
+    input.onchange = async () => {
+      const files = [...input.files];
+      input.value = '';
+      const ta = root.querySelector(`textarea[name="${key}"]`) || root.querySelector(`textarea[data-key="${key}"]`);
+      if (!files.length || !ta) return;
+      btn.disabled = true;
+      try {
+        for (const [i, file] of files.entries()) {
+          state.textContent = `上傳中…${files.length > 1 ? `（${i + 1}/${files.length}）` : ''}`;
+          const id = await uploadMedia(file);
+          const pos = ta.selectionStart ?? ta.value.length;
+          const before = ta.value.slice(0, pos), after = ta.value.slice(pos);
+          const ins = (before && !before.endsWith('\n\n') ? (before.endsWith('\n') ? '\n' : '\n\n') : '') + `![](media:${id})` + (after.startsWith('\n\n') ? '' : after.startsWith('\n') ? '\n' : '\n\n');
+          ta.value = before + ins + after;
+          ta.selectionStart = ta.selectionEnd = (before + ins).length;
+        }
+        state.textContent = '✓ 已插入';
+        ta.dispatchEvent(new Event('input', { bubbles: true }));
+        if (onInserted) onInserted(ta);
+      } catch (e) {
+        console.error(e);
+        state.textContent = '';
+        toast(e.message && !e.code ? e.message : '上傳失敗：' + (e.code || e.message));
+      } finally { btn.disabled = false; }
+    };
+  });
 }
 
 const isVerified = () => !!(user && user.emailVerified);
@@ -577,7 +659,8 @@ pages.blogEdit = async (app, id) => {
       '<div class="card pad"><h3>內容</h3><p class="muted small">可以貼外部文章連結、自己寫內容，或兩者都放（連結的文章顯示在上方）。</p>' +
       field('文章連結 <span class="muted small">可留空。貼上外部文章網址，讀者會在網站上直接看到這篇文章</span>', 'url', a.url, 'placeholder="https://…"') +
       `<label>文章內容 <span class="muted small">可留空。支援 # 標題、**粗體**、- 清單、&gt; 引用、[文字](網址)、![說明](圖片網址)</span>` +
-      `<textarea class="input textarea" name="text" rows="14" placeholder="在這裡寫文章內容…">${esc(a.text)}</textarea></label>` +
+      `</label>` + mediaButton('text') +
+      `<textarea class="input textarea" name="text" rows="14" placeholder="在這裡寫文章內容…">${esc(a.text)}</textarea>` +
       `<details class="article-preview" id="apv" ${a.text ? '' : 'hidden'} open><summary class="small">預覽</summary><div class="article">${renderArticle(a.text)}</div></details></div>` +
       '<div class="editor-actions"><span class="autosave muted small" id="autosave">修改後會自動儲存</span>' +
       '<button class="btn" id="save">完成，查看文章 →</button>' +
@@ -634,6 +717,7 @@ pages.blogEdit = async (app, id) => {
     };
     const rm = app.querySelector('#cover-remove');
     if (rm) rm.onclick = () => { collect(); a.cover = ''; draw(); bind(); autosave(0); };
+    bindMediaButtons(app);
     app.querySelector('#del').onclick = async () => {
       if (!confirm(`確定刪除「${a.title || '這篇文章'}」？此動作無法復原。`)) return;
       clearTimeout(timer); timer = 0;
@@ -685,7 +769,7 @@ pages.course = (app, id) => {
     `<h1>${esc(c.title)}</h1><p class="lead muted">${esc(c.subtitle)}</p>` +
     `<p class="muted small">${[c.instructor ? '講師 ' + esc(c.instructor) : '', esc(c.level), lessonsOf(c).length + ' 個單元'].filter(Boolean).join(' · ')}${minutesText(c)}</p>` + hint +
     (c.trailer ? '<h2>課程預告</h2>' + youtubeEmbed(c.trailer) : '') +
-    `<h2>課程介紹</h2><p>${esc(c.description)}</p>` +
+    `<h2>課程介紹</h2><div class="article course-intro">${renderArticle(c.description)}</div>` +
     ((c.outcomes || []).length ? `<h2>你將學到</h2><ul class="checks">${c.outcomes.map((o) => `<li>${esc(o)}</li>`).join('')}</ul>` : '') +
     '<h2>課程內容</h2>' + c.chapters.map((ch) =>
       `<div class="card chapter"><strong>${esc(ch.title)}</strong>` +
@@ -1616,7 +1700,10 @@ pages.edit = async (app, id) => {
       '</div></div></div>' +
 
       '<div class="card pad"><h3>課程介紹</h3>' +
-      area('課程介紹', 'description', c.description, 5) +
+      `<label>課程介紹 <span class="muted small">可以插入圖片或 GIF；支援 # 標題、**粗體**、- 清單、&gt; 引用</span></label>` +
+      mediaButton('description') +
+      `<textarea class="input textarea" name="description" rows="${c.description && c.description.length > 300 ? 14 : 6}">${esc(c.description)}</textarea>` +
+      `<details class="article-preview" id="desc-pv" ${c.description ? '' : 'hidden'}><summary class="small">預覽課程介紹</summary><div class="article">${renderArticle(c.description)}</div></details>` +
       area('你將學到', 'outcomes', (c.outcomes || []).join('\n'), 4, '每行一項') +
       field('公開預告片 YouTube 網址（可留空，任何人都看得到）', 'trailer', c.trailer || '') +
       '</div>' +
@@ -1690,6 +1777,7 @@ pages.edit = async (app, id) => {
     };
     const rm = app.querySelector('#cover-remove');
     if (rm) rm.onclick = () => { collect(); c.cover = ''; draw(); bind(); autosave(0); };
+    bindMediaButtons(app);
     ['c1', 'c2', 'mark'].forEach((n) => { f[n].oninput = () => { if (!c.cover) { collect(); app.querySelector('#cover-prev').innerHTML = thumb(c); } }; });
 
     f.onclick = async (e) => {
@@ -1724,6 +1812,11 @@ pages.edit = async (app, id) => {
     // 打字停下 1 秒、勾選或換顏色後自動儲存
     f.addEventListener('input', (e) => {
       // 文章預覽跟著打字更新
+      if (e.target.name === 'description') {
+        const pv = app.querySelector('#desc-pv');
+        pv.hidden = !e.target.value.trim();
+        pv.querySelector('.article').innerHTML = renderArticle(e.target.value);
+      }
       if (e.target.dataset.l === 'article') {
         const l = c.chapters[+e.target.dataset.ci].lessons[+e.target.dataset.li];
         const pv = app.querySelector(`[data-preview="${l.id}"]`);

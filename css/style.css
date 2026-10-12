@@ -355,3 +355,9 @@ table.orders th { font-size: 12px; color: var(--muted); background: var(--soft);
 .blog-cover { width: 100%; border-radius: 12px; display: block; margin: 10px 0; }
 #aq { margin-top: 8px; }
 .container.blog-page { max-width: 880px; }
+
+/* 課程介紹（可放圖片／GIF） */
+.course-intro img, .article img.media-img { max-width: 100%; height: auto; border-radius: 10px; display: block; margin: .8em 0; }
+.article img.media-img:not([src]) { min-height: 120px; width: 100%; background: var(--grid); }
+.article img.media-missing { display: none; }
+.media-tools { display: flex; align-items: center; gap: 10px; margin: 2px 0 6px; }
