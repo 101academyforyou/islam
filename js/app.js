@@ -7,7 +7,7 @@
  * 安全規則在 1.01academy repo 的 firestore.rules。
  */
 // 這個網站的 Firestore 集合名稱
-const COL = { courses: 'islam_courses', videos: 'islam_courseVideos', enroll: 'islam_enroll', prefs: 'islam_prefs', students: 'islam_students', notes: 'islam_notes', posts: 'islam_posts', counts: 'islam_counts', counted: 'islam_counted' };
+const COL = { courses: 'islam_courses', videos: 'islam_courseVideos', enroll: 'islam_enroll', prefs: 'islam_prefs', students: 'islam_students', notes: 'islam_notes', posts: 'islam_posts', counts: 'islam_counts', counted: 'islam_counted', stats: 'islam_stats' };
 const FIREBASE = 'https://www.gstatic.com/firebasejs/10.12.2/';
 const CONFIG = window.SITE_CONFIG || {};
 const configured = !!(CONFIG.firebaseConfig && CONFIG.firebaseConfig.apiKey);
@@ -23,6 +23,7 @@ let accessReady = Promise.resolve();
 const videoCache = {};   // 課程 id → { 單元 id: YouTube ID }
 let courses = COURSES;   // 課程目錄：優先讀 Firestore 的 courses 集合，讀不到時用 data.js
 let coursesFromDb = false;
+let learners = 0;       // 全站加入學習的累計人數（islam_stats/learners.n，每人只算一次）
 let joinCount = {};      // 課程 id → 加入學習的累計人數（islam_counts/{課程id}.n，移出學習區不會減少）
 
 /* ---------------- 小工具 ---------------- */
@@ -182,15 +183,22 @@ async function joinCourse(c, btn, stay = false) {
     const ref = fb.doc(db, COL.enroll, user.email.toLowerCase(), 'courses', c.id);
     // 第一次加入這門課時，學習人數 +1（同一個批次寫入，規則才能確認是真的加入；每人每門課只算一次）
     const mark = fb.doc(db, COL.counted, user.email.toLowerCase(), 'courses', c.id);
+    const person = fb.doc(db, COL.counted, user.email.toLowerCase()); // 第一次加入任何課程：全站人數 +1
     let counted = false;
     try {
-      if (!(await fb.getDoc(mark)).exists()) {
+      const [m, pm] = await Promise.all([fb.getDoc(mark), fb.getDoc(person)]);
+      if (!m.exists()) {
         const b = fb.writeBatch(db);
         b.set(ref, { joinedAt: at });
         b.set(mark, { at });
         b.set(fb.doc(db, COL.counts, c.id), { n: fb.increment(1) }, { merge: true });
+        if (!pm.exists()) {
+          b.set(person, { at });
+          b.set(fb.doc(db, COL.stats, 'learners'), { n: fb.increment(1) }, { merge: true });
+        }
         await b.commit();
         joinCount[c.id] = (joinCount[c.id] || 0) + 1;
+        if (!pm.exists()) learners++;
         counted = true;
       }
     } catch (e) { console.warn('人數未更新', e); }
@@ -247,9 +255,10 @@ async function loadCourses() {
 // 每門課加入學習的人數（任何人都看得到）
 async function loadCounts() {
   try {
-    const snap = await fb.getDocs(fb.collection(db, COL.counts));
+    const [snap, st] = await Promise.all([fb.getDocs(fb.collection(db, COL.counts)), fb.getDoc(fb.doc(db, COL.stats, 'learners'))]);
     joinCount = {};
     snap.docs.forEach((d) => { joinCount[d.id] = Math.max(0, Number(d.data().n) || 0); });
+    learners = st.exists() ? Math.max(0, Number(st.data().n) || 0) : 0;
   } catch (e) { console.error(e); }
 }
 const countText = (c) => joinCount[c.id] > 0 ? `<span class="learners">👥 ${joinCount[c.id].toLocaleString()} 人加入學習</span>` : '';
@@ -337,6 +346,8 @@ pages.home = (app) => {
     '<section class="hero"><div class="container">' +
     `<h1>${esc(CONFIG.tagline || '一步一步，認識伊斯蘭')}</h1>` +
     `<p class="lead muted">${esc(CONFIG.intro || '從最基礎開始，依照學習地圖循序漸進。所有課程免費，登入後加入課程即可觀看。')}</p>` +
+    `<p class="site-stats"><span>📚 目前共有 <strong>${path.filter((c) => c.published !== false).length}</strong> 門課程</span>` +
+    (learners > 0 ? `<span>👥 共 <strong>${learners.toLocaleString()}</strong> 人加入學習</span>` : '') + '</p>' +
     '<input class="input search" id="q" type="search" placeholder="搜尋課程…" aria-label="搜尋課程" autocomplete="off" />' +
     '</div></section>' +
     '<section class="container"><h2>學習地圖</h2>' +
@@ -1194,6 +1205,10 @@ async function syncCounts(list) {
   await loadCounts(); // 以資料庫目前的數字為準
   const real = {};
   list.forEach((s) => s.items.forEach((x) => { real[x.id] = (real[x.id] || 0) + 1; }));
+  if (list.length > learners) {
+    try { await fb.setDoc(fb.doc(db, COL.stats, 'learners'), { n: list.length }); learners = list.length; }
+    catch (e) { console.error('全站人數校正失敗', e); }
+  }
   const ids = new Set([...Object.keys(real), ...Object.keys(joinCount)]);
   for (const id of ids) {
     const n = real[id] || 0;
