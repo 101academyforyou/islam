@@ -3391,6 +3391,13 @@ window.addEventListener('hashchange', render);
 
 if (configured) {
   document.getElementById('app').innerHTML = '<div class="container"><p class="muted" style="padding:48px 0">載入中…</p></div>';
+  // 手機網路慢、或連線卡住時，不要一直停在「載入中…」：過幾秒提示可以重新整理
+  setTimeout(() => {
+    const p = document.querySelector('#app > .container > p.muted');
+    if (!document.getElementById('header').innerHTML && p && p.textContent === '載入中…') {
+      p.innerHTML = '載入中…<br/><span class="small">網路有點慢，還在連線中。等不及的話可以 <button type="button" class="link" onclick="location.reload()">重新整理</button>（換成 Wi‑Fi 或關掉省流量模式也會比較快）</span>';
+    }
+  }, 8000);
   initFirebase().catch((e) => {
     console.error(e);
     toast('無法連線到登入服務，請稍後再試');
