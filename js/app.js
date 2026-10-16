@@ -552,6 +552,40 @@ async function loadVideos(courseId) {
   return videoCache[courseId];
 }
 
+/* App 內建瀏覽器（LINE、Facebook、Instagram…）：Google 不允許在裡面用 Google 帳號登入，
+ * 而且登入視窗和網頁不共用暫存資料，會出現「missing initial state」。請使用者改用 Chrome／Safari 開啟 */
+function inAppBrowser() {
+  const ua = navigator.userAgent || '';
+  if (/\bLine\//i.test(ua)) return 'LINE';
+  if (/FBAN|FBAV|FB_IAB|FBIOS|Messenger/i.test(ua)) return 'Facebook';
+  if (/Instagram/i.test(ua)) return 'Instagram';
+  if (/MicroMessenger/i.test(ua)) return '微信';
+  if (/; wv\)/.test(ua)) return 'App'; // 其他 Android App 的內建瀏覽器
+  return '';
+}
+// 用外部瀏覽器打開目前這頁（網址帶 ?r=頁面，打開後回到同一頁）
+function openInBrowser() {
+  const route = location.hash.slice(1) || '/';
+  const base = location.origin + location.pathname + '?r=' + encodeURIComponent(route);
+  const app = inAppBrowser();
+  if (app === 'LINE') { location.href = base + '&openExternalBrowser=1'; return; } // LINE 支援用這個參數開外部瀏覽器
+  if (/Android/i.test(navigator.userAgent)) {
+    location.href = `intent://${location.host}${location.pathname}?r=${encodeURIComponent(route)}#Intent;scheme=https;package=com.android.chrome;S.browser_fallback_url=${encodeURIComponent(base)};end`;
+    return;
+  }
+  copyText(base).then(() => toast('已複製網址，請貼到 Safari 開啟'));
+}
+const copyText = (t) => (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject()).catch(() => { prompt('請複製這個網址，到 Safari 或 Chrome 開啟：', t); });
+const inAppNotice = () => {
+  const app = inAppBrowser();
+  if (!app) return '';
+  return `<div class="notice notice-warn"><strong>⚠️ 你現在是在 ${app === 'App' ? 'App' : esc(app)} 裡面開啟這個網頁</strong><br/>` +
+    'Google 不允許在 App 內建的瀏覽器裡用 Google 帳號登入。請先改用手機的瀏覽器（Chrome 或 Safari）開啟，再登入。' +
+    '<div class="lesson-nav"><button type="button" class="btn btn-sm" id="open-browser">用瀏覽器開啟</button>' +
+    '<button type="button" class="btn btn-ghost btn-sm" id="copy-url">複製網址</button></div>' +
+    `<p class="muted small">${app === 'LINE' ? '也可以按右上角「⋮」→「使用預設瀏覽器開啟」。' : '也可以按右上角選單 →「在瀏覽器中開啟」。'}用 Email 和密碼登入不受影響。</p></div>`;
+};
+
 function authError(e) {
   const map = {
     'auth/invalid-credential': 'Email 或密碼錯誤',
@@ -1654,7 +1688,7 @@ pages.login = (app, _, query) => {
   function draw() {
     const reg = mode === 'register';
     app.innerHTML = `<div class="container narrow"><h1>${reg ? '建立帳號' : '登入'}</h1>` +
-      '<div class="card pad">' +
+      '<div class="card pad">' + inAppNotice() +
       '<button class="btn btn-google btn-block" id="google"><svg width="18" height="18" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.6l6.8-6.8C35.8 2.4 30.3 0 24 0 14.6 0 6.6 5.4 2.7 13.2l7.9 6.2C12.5 13.6 17.8 9.5 24 9.5z"/><path fill="#4285F4" d="M46.1 24.5c0-1.6-.1-3.1-.4-4.5H24v9h12.4c-.5 2.9-2.2 5.3-4.6 6.9l7.4 5.7c4.3-4 6.9-9.9 6.9-17.1z"/><path fill="#FBBC05" d="M10.6 28.6c-.5-1.4-.8-3-.8-4.6s.3-3.2.8-4.6l-7.9-6.2C1 16.6 0 20.2 0 24s1 7.4 2.7 10.8l7.9-6.2z"/><path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.4-5.7c-2.1 1.4-4.8 2.3-8.5 2.3-6.2 0-11.5-4.1-13.4-9.9l-7.9 6.2C6.6 42.6 14.6 48 24 48z"/></svg>使用 Google 帳號登入</button>' +
       '<div class="divider">或使用 Email</div>' +
       '<form id="auth" novalidate>' +
@@ -1668,7 +1702,13 @@ pages.login = (app, _, query) => {
 
     const f = app.querySelector('#auth');
     app.querySelector('#switch').onclick = () => { mode = reg ? 'login' : 'register'; draw(); };
+    const ob = app.querySelector('#open-browser');
+    if (ob) {
+      ob.onclick = openInBrowser;
+      app.querySelector('#copy-url').onclick = () => copyText(location.origin + location.pathname + '?r=' + encodeURIComponent(location.hash.slice(1) || '/')).then(() => toast('已複製網址'));
+    }
     app.querySelector('#google').onclick = async () => {
+      if (inAppBrowser()) { toast('請先用瀏覽器（Chrome 或 Safari）開啟這個網頁，再用 Google 登入'); app.querySelector('#open-browser').focus(); return; }
       try {
         await fb.signInWithPopup(auth, new fb.GoogleAuthProvider());
         toast('登入成功'); // 登入狀態改變時會自動重新整理畫面並前往下一頁
@@ -3458,6 +3498,11 @@ async function render() {
 
 window.addEventListener('hashchange', render);
 
+// 從 App 改用瀏覽器開啟時，網址帶 ?r=頁面：回到同一頁，並把網址整理乾淨
+{
+  const r = new URLSearchParams(location.search).get('r');
+  if (r !== null) history.replaceState(null, '', location.pathname + (/^\/(?!\/)/.test(r) ? '#' + r : location.hash));
+}
 if (configured) {
   document.getElementById('app').innerHTML = '<div class="container"><p class="muted" style="padding:48px 0">載入中…</p></div>';
   // 手機網路慢、或連線卡住時，不要一直停在「載入中…」：過幾秒提示可以重新整理
