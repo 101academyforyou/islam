@@ -601,3 +601,6 @@ table.orders th { font-size: 12px; color: var(--muted); background: var(--soft);
 @media (hover: none) { .ev-del { opacity: .85; } }
 /* 行事曆：學生只能看活動（點一下打開活動頁，不能拖曳） */
 .drag-ev.ev-view { cursor: pointer; touch-action: auto; padding-right: 6px; }
+/* 在 App 內建瀏覽器開啟時的提醒 */
+.notice-warn { background: color-mix(in srgb, #f59e0b 14%, var(--card)); border: 1px solid color-mix(in srgb, #f59e0b 45%, transparent); line-height: 1.6; }
+.notice-warn .lesson-nav { margin: 8px 0 4px; }
