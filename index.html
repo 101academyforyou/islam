@@ -7,8 +7,15 @@
   <meta name="description" content="循序漸進學伊斯蘭：依照學習地圖，一步一步認識伊斯蘭。所有課程免費。" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&family=JetBrains+Mono:wght@700&family=Noto+Sans+TC:wght@400;700;900&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&family=JetBrains+Mono:wght@700&family=Noto+Sans+TC:wght@400;700;900&display=swap" rel="stylesheet" media="print" onload="this.media='all'" /><!-- 字型不擋住畫面：先用系統字型顯示，下載好再換 -->
   <link rel="stylesheet" href="css/style.css" />
+  <!-- 一開始就同時下載登入和資料庫的程式，不用等主程式下載完才開始 -->
+  <link rel="preconnect" href="https://www.gstatic.com" crossorigin />
+  <link rel="preconnect" href="https://firestore.googleapis.com" crossorigin />
+  <link rel="modulepreload" href="https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js" />
+  <link rel="modulepreload" href="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js" />
+  <link rel="modulepreload" href="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js" />
+  <link rel="modulepreload" href="js/app.js" />
   <script>
     try { var t = JSON.parse(localStorage.getItem('isl_theme')); if (t) document.documentElement.setAttribute('data-theme', t); } catch (e) {}
   </script>

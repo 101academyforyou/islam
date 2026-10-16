@@ -8,7 +8,7 @@
  */
 // 這個網站的 Firestore 集合名稱
 const COL = { courses: 'islam_courses', videos: 'islam_courseVideos', enroll: 'islam_enroll', prefs: 'islam_prefs', students: 'islam_students', notes: 'islam_notes', posts: 'islam_posts', counts: 'islam_counts', counted: 'islam_counted', stats: 'islam_stats', articles: 'islam_articles', blog: 'islam_blog', media: 'islam_media', events: 'islam_events', plans: 'islam_plans' };
-const FIREBASE = 'https://www.gstatic.com/firebasejs/10.12.2/';
+const FIREBASE = 'https://www.gstatic.com/firebasejs/10.12.2/'; // 改版本時 index.html 的 modulepreload 也要一起改
 const CONFIG = window.SITE_CONFIG || {};
 const configured = !!(CONFIG.firebaseConfig && CONFIG.firebaseConfig.apiKey);
 
@@ -259,28 +259,62 @@ async function initFirebase() {
   });
 }
 
-async function loadAccess() {
-  joined = [];
-  joinedAt = {};
-  myOrder = [];
-  myFolders = [];
-  mySchedules = {};
-  if (!isVerified()) return;
-  const email = user.email.toLowerCase();
+const accessState = () => ({ joined, joinedAt, myOrder, myFolders, mySchedules });
+let accessFor = ''; // 目前記憶體裡的學習資料是哪個帳號的（還沒載入完是空的）
+function applyAccess(a, email = '') {
+  accessFor = email;
+  joined = a.joined || [];
+  joinedAt = a.joinedAt || {};
+  myOrder = a.myOrder || [];
+  myFolders = a.myFolders || [];
+  mySchedules = a.mySchedules || {};
+}
+// 存一份自己的學習資料在這台電腦（換頁時順便更新）
+function saveAccessCache() {
+  if (isVerified() && accessFor === user.email.toLowerCase()) writeCache(accessCacheKey(accessFor), accessState());
+}
+async function fetchAccess(email) {
+  const a = { joined: [], joinedAt: {}, myOrder: [], myFolders: [], mySchedules: {} };
+  let ok = true;
   await Promise.all([
     fb.getDocs(fb.collection(db, COL.enroll, email, 'courses')).then((snap) => {
       // 預設依加入時間排列
-      snap.docs.forEach((d) => { joinedAt[d.id] = d.data().joinedAt || 0; });
-      joined = Object.keys(joinedAt).sort((a, b) => joinedAt[a] - joinedAt[b]);
-    }).catch((e) => console.error(e)),
+      snap.docs.forEach((d) => { a.joinedAt[d.id] = d.data().joinedAt || 0; });
+      a.joined = Object.keys(a.joinedAt).sort((x, y) => a.joinedAt[x] - a.joinedAt[y]);
+    }).catch((e) => { ok = false; console.error(e); }),
     fb.getDoc(fb.doc(db, COL.prefs, email)).then((snap) => {
-      myOrder = snap.exists() ? (snap.data().order || []) : [];
-      myFolders = snap.exists() ? (snap.data().folders || []) : [];
-      mySchedules = snap.exists() ? (snap.data().schedules || {}) : {};
-    }).catch((e) => console.error(e))
+      a.myOrder = snap.exists() ? (snap.data().order || []) : [];
+      a.myFolders = snap.exists() ? (snap.data().folders || []) : [];
+      a.mySchedules = snap.exists() ? (snap.data().schedules || {}) : {};
+    }).catch((e) => { ok = false; console.error(e); })
   ]);
+  return { ok, a };
+}
+async function loadAccess() {
+  applyAccess({});
+  if (!isVerified()) return;
+  const email = user.email.toLowerCase(), key = accessCacheKey(email);
+  const cached = readCache(key);
+  const fresh = fetchAccess(email);
+  if (cached && Array.isArray(cached.joined)) {
+    applyAccess(cached, email);
+    const before = JSON.stringify(accessState());
+    fresh.then(({ ok, a }) => {
+      if (!ok || !user || user.email.toLowerCase() !== email) return;
+      writeCache(key, a);
+      // 期間自己改過（加入課程、排課表…）就不覆蓋，那些已經寫進資料庫了
+      if (JSON.stringify(accessState()) !== before) return saveAccessCache();
+      applyAccess(a, email);
+      if (JSON.stringify(accessState()) !== before) refreshView();
+      syncStudent(); // 補齊／更新管理者的學生名單（不必等它完成）
+    });
+    return;
+  }
+  const { ok, a } = await fresh;
+  if (!user || user.email.toLowerCase() !== email) return;
+  applyAccess(a, email);
+  if (ok) writeCache(key, a);
   syncStudent(); // 補齊／更新管理者的學生名單（不必等它完成）
-
 }
 
 // 學生名單（給管理者看）：islam_students/{Email} = { email, name, courses: { 課程id: 加入時間 }, updatedAt }
@@ -419,30 +453,64 @@ async function fileCourse(courseId, folder) {
   await saveArea(myOrder.filter((id) => id !== courseId), folders);
 }
 
+/* 加快開啟速度：課程目錄和自己的學習資料存一份在這台電腦（localStorage）
+ * 下次打開先用存的資料馬上顯示，同時在背景向資料庫拿最新的；有變動再更新畫面 */
+const readCache = (k) => { try { return JSON.parse(localStorage.getItem(k)); } catch (e) { return null; } };
+const writeCache = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* 空間不夠就不存 */ } };
+const COURSE_CACHE = 'isl_cache_courses';
+const accessCacheKey = (email) => 'isl_cache_access:' + email;
+// 背景拿到新資料後重畫目前這頁：只限單純瀏覽的頁面（不打斷看影片、填表單、拖曳）
+function refreshView() {
+  const seg = (location.hash.slice(1) || '/').split('?')[0].split('/').filter(Boolean);
+  if (!['', 'course', 'my'].includes(seg[0] || '')) return;
+  if (document.querySelector('.modal-backdrop') || /input|textarea|select/i.test((document.activeElement || {}).tagName || '')) return;
+  const y = window.scrollY; // 重畫後留在原本捲動的位置
+  render().then(() => requestAnimationFrame(() => window.scrollTo(0, y)));
+}
+
 // 從 Firestore 讀取課程目錄；資料庫還沒有課程時，沿用 data.js
+const courseState = () => JSON.stringify([coursesFromDb ? courses : null, joinCount, learners]);
+async function fetchCourses() {
+  const [list, counts] = await Promise.all([
+    fb.getDocs(fb.collection(db, COL.courses)).then((snap) => ({ ok: true, list: snap.empty ? null : snap.docs.map((d) => ({ ...d.data(), id: d.id })).sort((x, y) => (x.order ?? 0) - (y.order ?? 0)) }))
+      .catch((e) => { console.error(e); return { ok: false }; }),
+    fetchCounts()
+  ]);
+  return { ok: list.ok && counts.ok, list: list.list, joinCount: counts.joinCount, learners: counts.learners, countsOk: counts.ok, listOk: list.ok };
+}
+function applyCourses(d, fromCache) {
+  if (d.listOk !== false && d.list) { courses = d.list; coursesFromDb = true; }
+  if (fromCache || d.countsOk) { joinCount = d.joinCount || {}; learners = d.learners || 0; }
+}
 async function loadCourses() {
-  const counts = loadCounts();
-  try {
-    const snap = await fb.getDocs(fb.collection(db, COL.courses));
-    if (!snap.empty) {
-      courses = snap.docs.map((d) => ({ ...d.data(), id: d.id }))
-        .sort((x, y) => (x.order ?? 0) - (y.order ?? 0));
-      coursesFromDb = true;
-    }
-  } catch (e) {
-    console.error(e);
+  const cached = readCache(COURSE_CACHE);
+  const fresh = fetchCourses();
+  if (cached && cached.list) {
+    applyCourses(cached, true);
+    const before = courseState();
+    fresh.then((d) => {
+      if (!d.ok) return;
+      writeCache(COURSE_CACHE, { list: d.list, joinCount: d.joinCount, learners: d.learners });
+      // 期間自己改過（加入課程、管理者編輯）就不覆蓋，那些已經寫進資料庫了
+      if (courseState() !== before) return;
+      applyCourses(d);
+      if (courseState() !== before) refreshView();
+    });
+    return;
   }
-  await counts;
+  const d = await fresh;
+  applyCourses(d);
+  if (d.ok) writeCache(COURSE_CACHE, { list: d.list, joinCount: d.joinCount, learners: d.learners });
 }
 
 // 每門課加入學習的人數（任何人都看得到）
-async function loadCounts() {
+async function fetchCounts() {
   try {
     const [snap, st] = await Promise.all([fb.getDocs(fb.collection(db, COL.counts)), fb.getDoc(fb.doc(db, COL.stats, 'learners'))]);
-    joinCount = {};
-    snap.docs.forEach((d) => { joinCount[d.id] = Math.max(0, Number(d.data().n) || 0); });
-    learners = st.exists() ? Math.max(0, Number(st.data().n) || 0) : 0;
-  } catch (e) { console.error(e); }
+    const jc = {};
+    snap.docs.forEach((d) => { jc[d.id] = Math.max(0, Number(d.data().n) || 0); });
+    return { ok: true, joinCount: jc, learners: st.exists() ? Math.max(0, Number(st.data().n) || 0) : 0 };
+  } catch (e) { console.error(e); return { ok: false }; }
 }
 // Lucide 線條圖示（https://lucide.dev，ISC 授權），顏色跟著文字
 const lucide = (paths) => `<svg class="icon" viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
@@ -516,7 +584,7 @@ function renderHeader() {
     '<button class="icon-btn" id="theme" aria-label="切換深淺色"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></button>' +
     '</nav></div>';
   const lo = document.getElementById('logout');
-  if (lo) lo.onclick = async () => { await fb.signOut(auth); toast('已登出'); go('/'); };
+  if (lo) lo.onclick = async () => { try { localStorage.removeItem(accessCacheKey(user.email.toLowerCase())); } catch (e) {} await fb.signOut(auth); toast('已登出'); go('/'); };
   document.getElementById('theme').onclick = () => {
     const now = document.documentElement.getAttribute('data-theme') ||
       (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
@@ -3371,6 +3439,7 @@ async function render() {
   const id = ++renderId;
   await accessReady; // 等開通資料載入完，避免畫面閃一下「尚未開通」
   if (id !== renderId) return; // 期間又換頁了
+  saveAccessCache();
   const hash = location.hash.slice(1) || '/';
   const [path, qs] = hash.split('?');
   const query = Object.fromEntries(new URLSearchParams(qs || ''));
