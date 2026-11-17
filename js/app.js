@@ -7,7 +7,7 @@
  * 安全規則在 1.01academy repo 的 firestore.rules。
  */
 // 這個網站的 Firestore 集合名稱
-const COL = { courses: 'islam_courses', videos: 'islam_courseVideos', enroll: 'islam_enroll', prefs: 'islam_prefs', students: 'islam_students', notes: 'islam_notes', posts: 'islam_posts', counts: 'islam_counts', counted: 'islam_counted', stats: 'islam_stats', articles: 'islam_articles', blog: 'islam_blog', media: 'islam_media', events: 'islam_events', plans: 'islam_plans' };
+const COL = { courses: 'islam_courses', videos: 'islam_courseVideos', enroll: 'islam_enroll', prefs: 'islam_prefs', students: 'islam_students', notes: 'islam_notes', posts: 'islam_posts', counts: 'islam_counts', counted: 'islam_counted', stats: 'islam_stats', articles: 'islam_articles', blog: 'islam_blog', media: 'islam_media', events: 'islam_events', plans: 'islam_plans', meta: 'islam_meta' };
 const FIREBASE = 'https://www.gstatic.com/firebasejs/10.12.2/'; // 改版本時 index.html 的 modulepreload 也要一起改
 const CONFIG = window.SITE_CONFIG || {};
 const configured = !!(CONFIG.firebaseConfig && CONFIG.firebaseConfig.apiKey);
@@ -27,6 +27,7 @@ let courses = COURSES;   // 課程目錄：優先讀 Firestore 的 courses 集�
 let coursesFromDb = false;
 let learners = 0;       // 全站加入學習的累計人數（islam_stats/learners.n，每人只算一次）
 let joinCount = {};      // 課程 id → 加入學習的累計人數（islam_counts/{課程id}.n，移出學習區不會減少）
+let mapSections = [];    // 學習地圖的分類資料夾 [{ id, name }]（islam_meta/map.sections，管理者自訂；課程的 section 欄位指向其中一個）
 
 /* ---------------- 小工具 ---------------- */
 const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
@@ -215,9 +216,18 @@ const isAdmin = () => isVerified() && (CONFIG.admins || []).some((e) => e.toLowe
 const hasJoined = (id) => joined.includes(id);
 // 所有課程免費：登入（並驗證 Email）後在課程頁按「加入課程」就能看，每門課分開加入
 const owns = (courseId) => isVerified() && (isAdmin() || hasJoined(courseId));
-// 學習地圖：首頁列出的課程依序是第 1、2、3… 階段
-const stepOf = (c) => listedCourses().filter((x) => !x.unlisted).indexOf(c) + 1;
-const nextCourse = (c) => { const l = listedCourses().filter((x) => !x.unlisted); const i = l.indexOf(c); return i > -1 ? l[i + 1] : null; };
+// 學習地圖：課程可以放進管理者自訂的分類資料夾；每個資料夾裡依序是第 1、2、3… 階段
+const sectionOf = (c) => (c && c.section && mapSections.some((s) => s.id === c.section) ? c.section : '');
+const sectionName = (c) => (mapSections.find((s) => s.id === sectionOf(c)) || {}).name || '';
+// 依資料夾分組（沒有資料夾時只有一組）；未分類的放最後「其他課程」
+function groupCourses(list) {
+  if (!mapSections.length) return [{ id: '', name: '', list }];
+  return [...mapSections.map((s) => ({ id: s.id, name: s.name, list: list.filter((c) => sectionOf(c) === s.id) })),
+    { id: '', name: '其他課程', list: list.filter((c) => !sectionOf(c)) }];
+}
+const sectionPath = (c) => listedCourses().filter((x) => !x.unlisted && sectionOf(x) === sectionOf(c));
+const stepOf = (c) => sectionPath(c).indexOf(c) + 1;
+const nextCourse = (c) => { const l = sectionPath(c); const i = l.indexOf(c); return i > -1 ? l[i + 1] : null; };
 
 /* ---------------- 學習進度（存在瀏覽器） ---------------- */
 function doneList(courseId) {
@@ -469,18 +479,22 @@ function refreshView() {
 }
 
 // 從 Firestore 讀取課程目錄；資料庫還沒有課程時，沿用 data.js
-const courseState = () => JSON.stringify([coursesFromDb ? courses : null, joinCount, learners]);
+const courseState = () => JSON.stringify([coursesFromDb ? courses : null, joinCount, learners, mapSections]);
 async function fetchCourses() {
-  const [list, counts] = await Promise.all([
+  const [list, counts, sections] = await Promise.all([
     fb.getDocs(fb.collection(db, COL.courses)).then((snap) => ({ ok: true, list: snap.empty ? null : snap.docs.map((d) => ({ ...d.data(), id: d.id })).sort((x, y) => (x.order ?? 0) - (y.order ?? 0)) }))
       .catch((e) => { console.error(e); return { ok: false }; }),
-    fetchCounts()
+    fetchCounts(),
+    // 學習地圖的分類資料夾（還沒部署新規則時讀不到，就當作沒有資料夾）
+    fb.getDoc(fb.doc(db, COL.meta, 'map')).then((snap) => (snap.exists() ? (snap.data().sections || []) : []))
+      .then((x) => x.filter((s) => s && s.id && s.name)).catch((e) => { console.error(e); return []; })
   ]);
-  return { ok: list.ok && counts.ok, list: list.list, joinCount: counts.joinCount, learners: counts.learners, countsOk: counts.ok, listOk: list.ok };
+  return { ok: list.ok && counts.ok, list: list.list, joinCount: counts.joinCount, learners: counts.learners, sections, countsOk: counts.ok, listOk: list.ok };
 }
 function applyCourses(d, fromCache) {
   if (d.listOk !== false && d.list) { courses = d.list; coursesFromDb = true; }
   if (fromCache || d.countsOk) { joinCount = d.joinCount || {}; learners = d.learners || 0; }
+  mapSections = d.sections || [];
 }
 async function loadCourses() {
   const cached = readCache(COURSE_CACHE);
@@ -490,7 +504,7 @@ async function loadCourses() {
     const before = courseState();
     fresh.then((d) => {
       if (!d.ok) return;
-      writeCache(COURSE_CACHE, { list: d.list, joinCount: d.joinCount, learners: d.learners });
+      writeCache(COURSE_CACHE, { list: d.list, joinCount: d.joinCount, learners: d.learners, sections: d.sections });
       // 期間自己改過（加入課程、管理者編輯）就不覆蓋，那些已經寫進資料庫了
       if (courseState() !== before) return;
       applyCourses(d);
@@ -500,7 +514,7 @@ async function loadCourses() {
   }
   const d = await fresh;
   applyCourses(d);
-  if (d.ok) writeCache(COURSE_CACHE, { list: d.list, joinCount: d.joinCount, learners: d.learners });
+  if (d.ok) writeCache(COURSE_CACHE, { list: d.list, joinCount: d.joinCount, learners: d.learners, sections: d.sections });
 }
 
 // 每門課加入學習的人數（任何人都看得到）
@@ -681,16 +695,26 @@ pages.home = (app) => {
 
   const listEl = app.querySelector('#list');
   let posts = []; // 已發布的文章（搜尋時一起找）
+  let foldClosed = [];
+  try { foldClosed = JSON.parse(localStorage.getItem('isl_map_closed')) || []; } catch (e) {}
   function draw() {
     app.querySelectorAll('[data-cat]').forEach((b) => b.classList.toggle('active', b.dataset.cat === cat));
     const words = q.split(/\s+/).filter(Boolean);
-    const shown = path.map((c, i) => [c, i + 1]).filter(([c]) =>
+    const shown = path.map((c) => [c, stepOf(c)]).filter(([c]) =>
       (!cat || c.category === cat) &&
-      words.every((w) => [c.title, c.subtitle, c.category, c.level, c.description, ...lessonsOf(c).map((l) => l.title)].join(' ').toLowerCase().includes(w)));
+      words.every((w) => [c.title, c.subtitle, c.category, c.level, c.description, sectionName(c), ...lessonsOf(c).map((l) => l.title)].join(' ').toLowerCase().includes(w)));
     // 有輸入關鍵字時，也找文章
     const found = words.length ? posts.filter((a) => words.every((w) => [a.title, a.summary, a.category, a.text].join(' ').toLowerCase().includes(w))) : [];
     listEl.innerHTML = !path.length ? '<p class="muted">課程準備中，敬請期待。</p>'
-      : shown.length ? shown.map(([c, n]) => row(c, n)).join('')
+      : shown.length ? groupCourses(shown.map(([c]) => c)).filter((g) => g.list.length).map((g) => {
+        const rows = g.list.map((c) => row(c, stepOf(c))).join('');
+        if (!g.name) return rows;
+        // 分類資料夾：可以收合（記在這台電腦）；搜尋或篩選時一律展開
+        const closed = !words.length && !cat && foldClosed.includes(g.id || '_');
+        return `<section class="map-sec${closed ? ' closed' : ''}" data-sec="${esc(g.id || '_')}">` +
+          `<button type="button" class="map-sec-head" data-sec-toggle aria-expanded="${!closed}"><span class="map-sec-arrow" aria-hidden="true">▾</span>📁 ${esc(g.name)}<span class="muted small">${g.list.length} 門課</span></button>` +
+          `<div class="path">${rows}</div></section>`;
+      }).join('')
       : `<p class="muted">找不到符合的課程${found.length ? `，下方有 ${found.length} 篇相關文章` : ''}。</p>`;
     const box = app.querySelector('#search-articles');
     box.hidden = !found.length;
@@ -701,6 +725,15 @@ pages.home = (app) => {
   app.querySelector('#q').oninput = (e) => { q = e.target.value.trim().toLowerCase(); draw(); };
   // 卡片上的「加入學習區」：不要觸發卡片連結
   app.onclick = (e) => {
+    const t = e.target.closest('[data-sec-toggle]');
+    if (t) {
+      const sec = t.closest('.map-sec'), id = sec.dataset.sec, closed = !sec.classList.contains('closed');
+      sec.classList.toggle('closed', closed);
+      t.setAttribute('aria-expanded', !closed);
+      foldClosed = closed ? [...new Set([...foldClosed, id])] : foldClosed.filter((x) => x !== id);
+      try { localStorage.setItem('isl_map_closed', JSON.stringify(foldClosed)); } catch (err) {}
+      return;
+    }
     const b = e.target.closest('[data-join]');
     if (b) { e.preventDefault(); const c = findCourse(b.dataset.join); if (c) joinCourse(c, b, true); return; }
     if (e.target.closest('[data-stop]')) { e.preventDefault(); go('/login?next=/'); }
@@ -1527,7 +1560,7 @@ pages.course = (app, id) => {
   if (!c || (c.published === false && !isAdmin())) return notFound(app);
   const mine = owns(c.id);
   const n = c.unlisted ? 0 : stepOf(c);
-  const prev = n > 1 ? listedCourses().filter((x) => !x.unlisted)[n - 2] : null;
+  const prev = n > 1 ? sectionPath(c)[n - 2] : null;
   let box;
   if (mine) {
     box = `<p class="owned">✓ ${isAdmin() && !hasJoined(c.id) ? '管理者' : '已加入'}（進度 ${progress(c)}%）</p>` +
@@ -1551,7 +1584,7 @@ pages.course = (app, id) => {
   app.innerHTML = '<div class="container course-page">' +
     `<div><a href="#/" class="muted small">← 學習地圖</a>` +
     (isAdmin() ? ` · <a href="#/admin/${c.id}" class="link small">✎ 編輯此課程</a>` + (c.published === false ? ' <span class="tag">（未上架）</span>' : '') : '') +
-    (n ? `<p class="step-label">第 ${n} 階段</p>` : '') +
+    (n ? `<p class="step-label">${sectionName(c) ? esc(sectionName(c)) + ' · ' : ''}第 ${n} 階段</p>` : '') +
     `<h1>${esc(c.title)}</h1><p class="lead muted">${esc(c.subtitle)}</p>` +
     `<p class="muted small">${[c.instructor ? '講師 ' + esc(c.instructor) : '', esc(c.level), lessonsOf(c).length + ' 個單元'].filter(Boolean).join(' · ')}${minutesText(c)}</p>` + hint +
     (c.trailer ? '<h2>課程預告</h2>' + youtubeEmbed(c.trailer) : '') +
@@ -2035,7 +2068,7 @@ pages.my = (app) => {
       '<button type="button" class="icon-btn" data-move="-1" aria-label="往上移" title="往上移">↑</button>' +
       '<button type="button" class="icon-btn" data-move="1" aria-label="往下移" title="往下移">↓</button></div>' +
       `<a href="#/learn/${c.id}" draggable="false">${thumb(c)}</a><div class="step-body">` +
-      `<span class="tag">${[n ? `第 ${n} 階段` : '', c.category, c.level].filter(Boolean).map(esc).join(' · ')}</span>` +
+      `<span class="tag">${[sectionName(c), n ? `第 ${n} 階段` : '', c.category, c.level].filter(Boolean).map(esc).join(' · ')}</span>` +
       `<h3><a href="#/learn/${c.id}" draggable="false">${esc(c.title)}</a></h3>` +
       `<p class="muted small">${esc(c.subtitle || '')}</p><p class="muted small">${lessonsOf(c).length} 個單元${minutesText(c)}</p>` +
       `<div class="bar"><i style="width:${p}%"></i></div><p class="small owned">${p === 100 ? '✓ 已完成' : `進度 ${p}%`}</p>` +
@@ -2906,24 +2939,37 @@ pages.admin = async (app, id, query, sub) => {
   if (id === 'event') return pages.eventEdit(app, sub, query);
   if (id === 'article') return pages.blogEdit(app, sub);
   if (id) return pages.edit(app, id);
-  app.innerHTML = '<div class="container">' + adminTabs('courses') + '<div class="row-between"><h1>課程管理</h1><span class="lesson-nav">' +
+  // 課程用小方格排列，依學習地圖的分類資料夾分組；拖曳方格調整順序，或拖到別的資料夾
+  const tile = (c) => `<div class="card admin-tile" data-id="${esc(c.id)}">` +
+    `<div class="tile-thumb">${thumb(c)}<span class="admin-no"></span>` +
+    (c.published === false ? '<span class="tile-flag">未上架</span>' : c.unlisted ? '<span class="tile-flag">不公開</span>' : '') + '</div>' +
+    `<div class="tile-body"><strong class="tile-title" title="${esc(c.title)}">${esc(c.title)}</strong>` +
+    `<p class="muted small">${[esc(c.category || ''), lessonsOf(c).length + ' 個單元'].filter(Boolean).join(' · ')}</p>` +
+    '<div class="tile-actions">' + (coursesFromDb ? `<a class="btn btn-sm" href="#/admin/${c.id}">編輯</a>` : '') +
+    `<a class="btn btn-ghost btn-sm" href="#/course/${c.id}">查看</a>` +
+    (coursesFromDb ? '<button type="button" class="icon-btn" data-step="-1" aria-label="往前" title="往前">‹</button><button type="button" class="icon-btn" data-step="1" aria-label="往後" title="往後">›</button>' : '') + '</div>' +
+    (coursesFromDb && mapSections.length ? `<label class="tile-sec small muted">📁 <select data-sec-pick aria-label="分類資料夾"><option value="">其他課程</option>${mapSections.map((x) => `<option value="${esc(x.id)}"${sectionOf(c) === x.id ? ' selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label>` : '') +
+    '</div></div>';
+  const groups = groupCourses(courses);
+  app.innerHTML = '<div class="container wide">' + adminTabs('courses') + '<div class="row-between"><h1>課程管理</h1><span class="lesson-nav">' +
     '<a class="btn btn-ghost btn-sm" href="#/admin/playlist">▶ 從播放清單建立</a><a class="btn btn-sm" href="#/admin/new">＋ 新增課程</a><a class="btn btn-sm" href="#/admin/article/new">＋ 新增文章</a><a class="btn btn-sm" href="#/admin/event/new">＋ 新增活動</a></span></div>' +
     (coursesFromDb ? '' :
       '<div class="card pad notice-card"><strong>第一次使用：請先匯入課程</strong><p class="muted small">目前的課程資料來自網站內建檔案。按下面的按鈕把課程匯入資料庫後，就能在網站上直接編輯。</p>' +
       '<button class="btn btn-sm" id="import">匯入現有課程到資料庫</button></div>') +
-    (coursesFromDb && courses.length > 1 ? '<p class="muted small">按住 ⠿ 拖曳可以調整課程順序（= 學習地圖的階段順序），放開後自動儲存；也可以按 ↑ ↓。</p>' : '') +
-    `<div class="admin-list${coursesFromDb ? ' sortable' : ''}">` + courses.map((c, i) =>
-      `<div class="card admin-row" data-id="${esc(c.id)}">` +
-      (coursesFromDb ? `<div class="admin-drag"><span class="drag-handle" title="拖曳調整順序" aria-label="拖曳">⠿</span><span class="admin-no">${i + 1}</span></div>` : '') +
-      `${thumb(c)}<div class="pad"><strong>${esc(c.title)}</strong>` +
-      `<p class="muted small">${[esc(c.category || ''), lessonsOf(c).length + ' 個單元', c.published === false ? '<span class="tag">未上架</span>' : '已上架'].filter(Boolean).join(' · ')}` +
-      (c.unlisted ? ' · <span class="tag">不公開</span>' : '') +
-      '</p>' +
-      `<div class="lesson-nav">${coursesFromDb ? `<a class="btn btn-sm" href="#/admin/${c.id}">編輯</a>` : ''}` +
-      `<a class="btn btn-ghost btn-sm" href="#/course/${c.id}">查看</a>` +
-      (coursesFromDb && i > 0 ? `<button class="btn btn-ghost btn-sm" data-up="${i}">↑ 往前</button>` : '') +
-      (coursesFromDb && i < courses.length - 1 ? `<button class="btn btn-ghost btn-sm" data-down="${i}">↓ 往後</button>` : '') +
-      '</div></div></div>').join('') + '</div></div>';
+    (coursesFromDb ? '<div class="row-between admin-sec-bar"><p class="muted small">按住方格拖曳可以調整順序，或拖到別的分類資料夾（= 學習地圖的分組和階段順序），放開後自動儲存。</p>' +
+      '<button type="button" class="btn btn-sm" id="sec-add">＋ 新增分類資料夾</button></div>' : '') +
+    groups.map((g, gi) => (g.name
+      ? `<section class="admin-sec" data-sec="${esc(g.id)}"><div class="admin-sec-head"><strong>📁 ${esc(g.name)}</strong><span class="muted small">${g.list.length} 門課</span>` +
+        (g.id ? '<span class="admin-sec-tools">' +
+          (gi > 0 ? '<button type="button" class="btn btn-ghost btn-sm" data-sec-act="up">↑ 往上</button>' : '') +
+          (gi < mapSections.length - 1 ? '<button type="button" class="btn btn-ghost btn-sm" data-sec-act="down">↓ 往下</button>' : '') +
+          '<button type="button" class="btn btn-ghost btn-sm" data-sec-act="rename">重新命名</button><button type="button" class="btn btn-ghost btn-sm" data-sec-act="del">刪除資料夾</button></span>'
+          : '<span class="muted small">（還沒放進資料夾的課程）</span>') + '</div>'
+      : '<section class="admin-sec" data-sec="">') +
+      `<div class="admin-grid${coursesFromDb ? ' sortable' : ''}">${g.list.map(tile).join('')}${g.list.length ? '' : '<p class="muted small admin-empty">把課程拖到這裡</p>'}</div></section>`).join('') +
+    '</div>';
+  const renumber = () => app.querySelectorAll('.admin-grid').forEach((grid) => { let k = 0; grid.querySelectorAll('.admin-tile').forEach((t) => { t.querySelector('.admin-no').textContent = ++k; }); });
+  renumber();
 
   const imp = app.querySelector('#import');
   if (imp) imp.onclick = async () => {
@@ -2937,62 +2983,125 @@ pages.admin = async (app, id, query, sub) => {
       pages.admin(app);
     } catch (e) { console.error(e); imp.disabled = false; imp.textContent = '匯入現有課程到資料庫'; toast('匯入失敗：' + (e.code || e.message) + '（請確認已更新 Firestore 規則）'); }
   };
-  // 依新的順序儲存（只寫入順序有變的課程）
-  const saveOrder = async (ids) => {
+  // 依畫面上的排列儲存：順序 = 資料夾的順序再接資料夾裡的順序；只寫入有變的課程
+  const saveLayout = async () => {
     const byId = Object.fromEntries(courses.map((c) => [c.id, c]));
-    const next = ids.map((id) => byId[id]).filter(Boolean);
-    const changed = next.filter((c, k) => c.order !== k);
-    next.forEach((c, k) => { c.order = k; });
-    courses = next;
+    const placed = [];
+    app.querySelectorAll('.admin-sec').forEach((sec) => sec.querySelectorAll('.admin-tile').forEach((t) => { if (byId[t.dataset.id]) placed.push([byId[t.dataset.id], sec.dataset.sec]); }));
+    const changed = [];
+    placed.forEach(([c, sec], k) => {
+      const upd = {};
+      if (c.order !== k) upd.order = k;
+      if (mapSections.length && (c.section || '') !== sec) upd.section = sec;
+      if (Object.keys(upd).length) { Object.assign(c, upd); changed.push([c, upd]); }
+    });
+    courses = placed.map(([c]) => c);
     try {
-      await Promise.all(changed.map((c) => fb.setDoc(fb.doc(db, COL.courses, c.id), { order: c.order }, { merge: true })));
-      if (changed.length) toast('已更新課程順序');
-    } catch (err) { toast('排序失敗：' + (err.code || err.message)); }
+      await Promise.all(changed.map(([c, upd]) => fb.setDoc(fb.doc(db, COL.courses, c.id), upd, { merge: true })));
+      if (changed.length) toast('已更新學習地圖');
+    } catch (err) { toast('儲存失敗：' + (err.code || err.message)); }
     pages.admin(app);
   };
-  app.onclick = async (e) => {
-    const b = e.target.closest('[data-up],[data-down]');
-    if (!b) return;
-    const ids = courses.map((c) => c.id);
-    const i = +(b.dataset.up ?? b.dataset.down), j = b.dataset.up != null ? i - 1 : i + 1;
-    [ids[i], ids[j]] = [ids[j], ids[i]];
-    saveOrder(ids);
+  // 分類資料夾：新增、重新命名、刪除、調整順序
+  const saveSections = async (list, msg) => {
+    try {
+      await fb.setDoc(fb.doc(db, COL.meta, 'map'), { sections: list, updatedAt: Date.now() });
+      mapSections = list;
+      toast(msg);
+      return true;
+    } catch (err) { toast('儲存失敗：' + (err.code || err.message) + '（請確認已部署最新的 Firestore 規則）'); return false; }
   };
-  // 拖曳排序
-  const list = app.querySelector('.admin-list.sortable');
-  if (!list) return;
-  let dragging = null, startIds = '';
-  list.addEventListener('pointerdown', (e) => {
-    const h = e.target.closest('.drag-handle');
-    if (!h) return;
-    e.preventDefault();
-    dragging = h.closest('.admin-row');
-    startIds = [...list.children].map((x) => x.dataset.id).join();
-    dragging.classList.add('dragging');
-    h.setPointerCapture(e.pointerId);
-  });
-  list.addEventListener('pointermove', (e) => {
-    if (!dragging) return;
-    const over = document.elementFromPoint(e.clientX, e.clientY);
-    const target = over && over.closest('.admin-row');
-    if (!target || target === dragging || !list.contains(target)) {
-      // 拖到畫面邊緣時自動捲動
-      if (e.clientY < 70) scrollBy(0, -12); else if (e.clientY > innerHeight - 50) scrollBy(0, 12);
+  app.onclick = async (e) => {
+    if (e.target.id === 'sec-add') {
+      const name = (prompt('新的分類資料夾名稱（例如：入門、信仰、功修、生活）：') || '').trim().slice(0, 40);
+      if (!name) return;
+      if (await saveSections([...mapSections, { id: newId('s'), name }], `已新增「${name}」`)) pages.admin(app);
       return;
     }
-    const r = target.getBoundingClientRect();
-    if (e.clientY > r.top + r.height / 2) target.after(dragging); else target.before(dragging);
-    [...list.children].forEach((row, k) => { const n = row.querySelector('.admin-no'); if (n) n.textContent = k + 1; });
-  });
-  const end = () => {
-    if (!dragging) return;
-    dragging.classList.remove('dragging');
-    dragging = null;
-    const ids = [...list.children].map((x) => x.dataset.id);
-    if (ids.join() !== startIds) saveOrder(ids);
+    const sa = e.target.closest('[data-sec-act]');
+    if (sa) {
+      const id = sa.closest('.admin-sec').dataset.sec, i = mapSections.findIndex((x) => x.id === id), cur = mapSections[i];
+      if (!cur) return;
+      const act = sa.dataset.secAct;
+      if (act === 'rename') {
+        const name = (prompt('資料夾名稱：', cur.name) || '').trim().slice(0, 40);
+        if (name && name !== cur.name && await saveSections(mapSections.map((x) => (x.id === id ? { ...x, name } : x)), '已重新命名')) pages.admin(app);
+      } else if (act === 'del') {
+        if (!confirm(`刪除資料夾「${cur.name}」？裡面的課程不會刪除，會移到「其他課程」。`)) return;
+        if (!await saveSections(mapSections.filter((x) => x.id !== id), '已刪除資料夾')) return;
+        const inIt = courses.filter((c) => c.section === id);
+        try { await Promise.all(inIt.map((c) => fb.setDoc(fb.doc(db, COL.courses, c.id), { section: '' }, { merge: true }))); inIt.forEach((c) => { c.section = ''; }); }
+        catch (err) { toast('更新課程失敗：' + (err.code || err.message)); }
+        pages.admin(app);
+      } else {
+        const j = act === 'up' ? i - 1 : i + 1;
+        if (j < 0 || j >= mapSections.length) return;
+        const list = [...mapSections];
+        [list[i], list[j]] = [list[j], list[i]];
+        if (await saveSections(list, '已調整資料夾順序')) { pages.admin(app); await saveLayout(); }
+      }
+      return;
+    }
+    const st = e.target.closest('[data-step]');
+    if (st) {
+      const t = st.closest('.admin-tile');
+      const sib = +st.dataset.step < 0 ? t.previousElementSibling : t.nextElementSibling;
+      if (!sib || !sib.classList.contains('admin-tile')) return;
+      if (+st.dataset.step < 0) sib.before(t); else sib.after(t);
+      saveLayout();
+    }
   };
-  list.addEventListener('pointerup', end);
-  list.addEventListener('pointercancel', end);
+  app.onchange = (e) => {
+    const sel = e.target.closest('[data-sec-pick]');
+    if (!sel) return;
+    const t = sel.closest('.admin-tile');
+    const grid = app.querySelector(`.admin-sec[data-sec="${CSS.escape(sel.value)}"] .admin-grid`);
+    if (grid) { grid.appendChild(t); saveLayout(); }
+  };
+  // 拖曳方格：在同一個資料夾裡調整順序，或拖到別的資料夾
+  if (!coursesFromDb) return;
+  let drag = null;
+  // 用 onxxx（不是 addEventListener）：重畫這頁時不會重複綁定
+  app.onpointerdown = (e) => {
+    const t = e.target.closest('.admin-grid.sortable .admin-tile');
+    if (!t || e.button > 0 || e.target.closest('a, button, select, label')) return;
+    drag = { t, x: e.clientX, y: e.clientY, moved: false, start: [...app.querySelectorAll('.admin-tile')].map((x) => x.dataset.id + (x.closest('.admin-sec').dataset.sec)).join() };
+  };
+  app.onpointermove = (e) => {
+    if (!drag) return;
+    if (!drag.moved) {
+      if (Math.hypot(e.clientX - drag.x, e.clientY - drag.y) < 6) return;
+      drag.moved = true;
+      drag.t.classList.add('dragging');
+      document.body.classList.add('no-select');
+    }
+    e.preventDefault();
+    const over = document.elementFromPoint(e.clientX, e.clientY);
+    const target = over && over.closest('.admin-tile');
+    const grid = over && over.closest('.admin-grid');
+    if (target && target !== drag.t) {
+      const r = target.getBoundingClientRect();
+      if (e.clientX > r.left + r.width / 2) target.after(drag.t); else target.before(drag.t);
+    } else if (!target && grid && !grid.contains(drag.t)) {
+      grid.appendChild(drag.t);
+    }
+    app.querySelectorAll('.admin-empty').forEach((x) => { x.hidden = !!x.parentElement.querySelector('.admin-tile'); });
+    renumber();
+    // 拖到畫面邊緣時自動捲動
+    if (e.clientY < 70) scrollBy(0, -14); else if (e.clientY > innerHeight - 50) scrollBy(0, 14);
+  };
+  const end = () => {
+    if (!drag) return;
+    const d = drag;
+    drag = null;
+    document.body.classList.remove('no-select');
+    if (!d.moved) return;
+    d.t.classList.remove('dragging');
+    const now = [...app.querySelectorAll('.admin-tile')].map((x) => x.dataset.id + (x.closest('.admin-sec').dataset.sec)).join();
+    if (now !== d.start) saveLayout();
+  };
+  app.onpointerup = end;
+  app.onpointercancel = end;
 };
 
 const adminTabs = (cur) => '<div class="chips admin-tabs">' +
@@ -3215,7 +3324,8 @@ pages.edit = async (app, id) => {
       field('副標題', 'subtitle', c.subtitle) +
       '<div class="two">' + field('分類 <span class="muted small">學生可以在首頁依分類篩選，例如：信仰、功修、生活</span>', 'category', c.category || '') + field('程度', 'level', c.level) + '</div>' +
       '<div class="two">' + field('講師', 'instructor', c.instructor) + '<span></span></div>' +
-      '<p class="muted small">學習地圖的順序在「課程管理」用「↑ 往前」調整。</p>' +
+      (mapSections.length ? `<label>學習地圖的分類資料夾<select class="input" name="section"><option value="">其他課程（未分類）</option>${mapSections.map((x) => `<option value="${esc(x.id)}"${sectionOf(c) === x.id ? ' selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label>` : '') +
+      '<p class="muted small">分類資料夾和順序也可以在「課程管理」直接拖曳方格調整。</p>' +
       `<label class="check"><input type="checkbox" name="published" ${c.published !== false ? 'checked' : ''}/> 上架（取消勾選則只有管理者看得到）</label>` +
       `<label class="check"><input type="checkbox" name="unlisted" ${c.unlisted ? 'checked' : ''}/> 不公開：不列在學習地圖，只有拿到課程連結的人才能進入</label>` +
       `<p class="muted small">課程連結：<code id="course-link">${esc(courseLink(c.id))}</code> <button type="button" class="btn btn-ghost btn-sm" id="copy-link">複製</button></p></div>` +
@@ -3273,6 +3383,7 @@ pages.edit = async (app, id) => {
     c.title = f.title.value.trim();
     c.subtitle = f.subtitle.value.trim();
     c.category = f.category.value.trim();
+    if (f.section) c.section = f.section.value;
     c.level = f.level.value.trim();
     c.instructor = f.instructor.value.trim();
     c.price = 0; // 所有課程免費
