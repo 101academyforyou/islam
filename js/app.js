@@ -684,7 +684,7 @@ pages.home = (app) => {
     '<section class="container"><h2>學習地圖</h2>' +
     (cats.length ? '<div class="chips" id="chips"><button class="chip" data-cat="">全部</button>' +
       cats.map((c) => `<button class="chip" data-cat="${esc(c)}">${esc(c)}</button>`).join('') + '</div>' : '') +
-    '<div class="path" id="list"></div>' +
+    '<div class="path map-grid" id="list"></div>' +
     '<div id="search-articles" hidden></div>' +
     (hidden.length ? '<h3 class="muted">不公開的課程（只有管理者看得到這個列表）</h3><div class="path">' + hidden.map((c) => row(c, 0)).join('') + '</div>' : '') +
     '</section>' +
@@ -713,7 +713,7 @@ pages.home = (app) => {
         const closed = !words.length && !cat && foldClosed.includes(g.id || '_');
         return `<section class="map-sec${closed ? ' closed' : ''}" data-sec="${esc(g.id || '_')}">` +
           `<button type="button" class="map-sec-head" data-sec-toggle aria-expanded="${!closed}"><span class="map-sec-arrow" aria-hidden="true">▾</span>📁 ${esc(g.name)}<span class="muted small">${g.list.length} 門課</span></button>` +
-          `<div class="path">${rows}</div></section>`;
+          `<div class="path map-grid">${rows}</div></section>`;
       }).join('')
       : `<p class="muted">找不到符合的課程${found.length ? `，下方有 ${found.length} 篇相關文章` : ''}。</p>`;
     const box = app.querySelector('#search-articles');
