@@ -1203,6 +1203,19 @@ function notifyText(e) {
     ? `${repeatText(e)}${e.allDay || !e.startTime ? '（全天）' : ` ${e.startTime}${e.endTime ? '–' + e.endTime : ''}`}`
     : whenText(e) + (e.allDay || !e.startTime ? '（全天）' : '');
   const desc = plainText(e.description);
+  // 有選相關課程：自動帶入完整的課程介紹（副標題、介紹、你將學到、單元列表、課程連結）
+  const courseInfo = c ? [
+    `━━━━ 課程介紹：${c.title} ━━━━`,
+    c.subtitle || null,
+    [c.instructor ? '講師 ' + c.instructor : '', c.level, lessonsOf(c).length + ' 個單元'].filter(Boolean).join(' · '),
+    '', plainText(c.description) || null, c.description ? '' : null,
+    (c.outcomes || []).length ? '你將學到：' : null,
+    ...(c.outcomes || []).map((o) => '・' + o),
+    (c.outcomes || []).length ? '' : null,
+    '課程內容：',
+    ...c.chapters.flatMap((ch) => [c.chapters.length > 1 && ch.title ? `【${ch.title}】` : null, ...ch.lessons.map((l, i) => `${i + 1}. ${l.title}`)]),
+    '', `課程頁面：${courseLink(c.id)}`, ''
+  ] : [];
   const lines = [
     '您好：', '',
     `${CONFIG.siteName || '循序漸進學伊斯蘭'}誠摯邀請您參加「${e.title}」。`, '',
@@ -1210,7 +1223,8 @@ function notifyText(e) {
     placeText(e) ? `■ 地點：${placeText(e)}` : null,
     e.url ? `■ 連結：${e.url}` : null,
     c ? `■ 相關課程：${c.title}` : null,
-    '', desc ? (desc.length > 600 ? desc.slice(0, 600) + '…' : desc) : null, desc ? '' : null,
+    '', desc || null, desc ? '' : null,
+    ...courseInfo,
     `活動詳情與加入行事曆：${pageUrl}`, '',
     `${CONFIG.siteName || '循序漸進學伊斯蘭'} 敬上`,
     '（如不想再收到活動通知，請直接回信告訴我們。）'
@@ -1242,12 +1256,17 @@ async function openNotify(box, e) {
       `<label class="check"><input type="radio" name="who" value="all" ${who === 'all' ? 'checked' : ''}/> 所有學生（${groups.all.length} 人）</label>` +
       (c ? `<label class="check"><input type="radio" name="who" value="course" ${who === 'course' ? 'checked' : ''}/> 加入「${esc(c.title)}」的學生（${groups.course.length} 人）</label>` : '') + '</div>' +
       `<label>標題<input class="input" id="n-subject" value="${esc(t.subject)}"/></label>` +
-      `<label>內容 <span class="muted small">可以修改後再寄</span><textarea class="input textarea" id="n-body" rows="12">${esc(t.body)}</textarea></label>` +
+      `<label>內容 <span class="muted small">已自動帶入活動說明${c ? '和完整的課程介紹' : ''}，可以修改後再寄</span><textarea class="input textarea" id="n-body" rows="16">${esc(t.body)}</textarea></label>` +
       (list.length
-        ? `<p class="muted small">收件人放在<strong>密件副本</strong>，學生之間看不到彼此的 Email。${batches.length > 1 ? `人數較多，分成 ${batches.length} 封，每封 ${NOTIFY_BATCH} 人，請每一封都按傳送。` : ''}Gmail 每天約可寄 500 人。</p>` +
-          '<div class="lesson-nav">' + batches.map((b, i) => `<button type="button" class="btn btn-sm" data-batch="${i}">✉ 開啟 Gmail${batches.length > 1 ? `（第 ${i + 1} 封，${b.length} 人）` : `（${b.length} 人）`}</button>`).join('') +
-          '<button type="button" class="btn btn-ghost btn-sm" id="n-copy-to">複製收件人</button><button type="button" class="btn btn-ghost btn-sm" id="n-copy-body">複製內容</button></div>'
+        ? '<div class="notify-send"><p class="notify-step"><strong>寄出</strong>：按下面的按鈕會打開 Gmail，收件人、標題、內容都已經填好，<strong>在 Gmail 視窗按「傳送」</strong>就寄出了。</p>' +
+          '<div class="lesson-nav">' + batches.map((b, i) => `<button type="button" class="btn btn-send" data-batch="${i}">✉ 寄出通知${batches.length > 1 ? `（第 ${i + 1} 封，${b.length} 人）` : `給 ${b.length} 人`}</button>`).join('') + '</div>' +
+          `<p class="muted small">收件人放在<strong>密件副本</strong>，學生之間看不到彼此的 Email。${batches.length > 1 ? `人數較多，分成 ${batches.length} 封，每封 ${NOTIFY_BATCH} 人，請每一封都要在 Gmail 按傳送。` : ''}Gmail 每天約可寄 500 人。</p>` +
+          '<p class="muted small" id="n-long" hidden>⚠ 內容很長，Gmail 可能放不下全部內容；如果 Gmail 裡的內容不完整，請按「複製內容」再貼到 Gmail。</p>' +
+          '<div class="lesson-nav"><button type="button" class="btn btn-ghost btn-sm" id="n-copy-to">複製收件人</button><button type="button" class="btn btn-ghost btn-sm" id="n-copy-body">複製內容</button></div></div>'
         : '<p class="muted">目前沒有可以寄送的學生。</p>');
+    const longHint = () => { const el = box.querySelector('#n-long'); if (el) el.hidden = encodeURIComponent(box.querySelector('#n-body').value).length < 7000; };
+    box.querySelector('#n-body').addEventListener('input', longHint);
+    longHint();
     box.querySelectorAll('[name=who]').forEach((r) => { r.onchange = () => { who = r.value; draw(); }; });
     box.querySelectorAll('[data-batch]').forEach((b) => {
       b.onclick = () => {
@@ -1256,7 +1275,8 @@ async function openNotify(box, e) {
         const url = 'https://mail.google.com/mail/?view=cm&fs=1' + (from ? '&authuser=' + encodeURIComponent(from) : '') +
           `&bcc=${encodeURIComponent(bcc)}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
         window.open(url, '_blank', 'noopener');
-        b.textContent = '✓ ' + b.textContent.replace(/^✓ /, '');
+        b.textContent = '✓ 已開啟 Gmail，請在 Gmail 按「傳送」' + (batches.length > 1 ? `（第 ${+b.dataset.batch + 1} 封）` : '');
+        b.classList.add('sent');
       };
     });
     const copy = async (text, msg) => { try { await navigator.clipboard.writeText(text); toast(msg); } catch (err) { toast('無法複製，請手動選取'); } };
@@ -1315,12 +1335,16 @@ pages.eventEdit = async (app, id, query = {}) => {
       '<div class="card pad"><h3>活動說明 <span class="muted small">可留空</span></h3>' + mediaButton('description') +
       `<textarea class="input textarea" name="description" rows="8" placeholder="活動內容、注意事項…">${esc(e.description)}</textarea>` +
       `<details class="article-preview" id="epv" ${e.description ? '' : 'hidden'} open><summary class="small">預覽</summary><div class="article">${renderArticle(e.description)}</div></details></div>` +
+      // 複製到指定日期：每個日期各建立一個單次活動（內容、時間都一樣）
+      '<div class="card pad copy-card"><h3>📋 複製到其他日期 <span class="muted small">可留空</span></h3>' +
+      '<p class="muted small">同樣的活動要在別天再辦一次？加上日期後按「建立複製」，每個日期會各建立一個<strong>單次</strong>活動（標題、時間、地點、說明都一樣，之後可以分別修改）。固定每週、每月的活動請用上面的「重複」。</p>' +
+      xdateTools('加入日期') + '<button type="button" class="btn btn-sm" id="copy-make" disabled>建立複製</button></div>' +
       '<div class="editor-actions"><span class="autosave muted small" id="autosave">修改後會自動儲存</span>' +
       '<button class="btn" id="save">完成，查看活動 →</button>' +
       '<button type="button" class="btn btn-ghost" id="del">刪除活動</button></div></form>' +
       '<div class="card pad notify-card"><div class="row-between"><h3>📧 寄送活動通知</h3>' +
-      '<button type="button" class="btn btn-sm" id="notify-open">用 Gmail 寄送通知</button></div>' +
-      `<p class="muted small">會打開你的 Gmail（${esc(CONFIG.notifyFrom || CONFIG.email || '')}），收件人放在密件副本、標題和內容都幫你寫好，檢查後由你自己按「傳送」。</p>` +
+      '<button type="button" class="btn btn-sm" id="notify-open">準備通知信 ↓</button></div>' +
+      `<p class="muted small">先在下面選收件人、檢查內容，再按「✉ 寄出通知」。會打開你的 Gmail（${esc(CONFIG.notifyFrom || CONFIG.email || '')}），收件人放在密件副本、標題和內容都幫你寫好，檢查後由你自己按「傳送」。</p>` +
       '<div id="notify"></div></div></div>';
   }
   function collect() {
@@ -1358,7 +1382,36 @@ pages.eventEdit = async (app, id, query = {}) => {
   }
   function bind() {
     const f = app.querySelector('#ee');
+    // 複製到其他日期
+    const makeBtn = app.querySelector('#copy-make');
+    const xd = bindXdates(app.querySelector('.copy-card'), () => f.start.value, () => {
+      const n = xd ? xd.dates().filter((d) => d !== f.start.value).length : 0;
+      makeBtn.disabled = !n;
+      makeBtn.textContent = n ? `建立複製（${n} 個）` : '建立複製';
+    });
+    app.querySelector('.copy-card').addEventListener('input', () => { const n = xd.dates().filter((d) => d !== f.start.value).length; makeBtn.disabled = !n; makeBtn.textContent = n ? `建立複製（${n} 個）` : '建立複製'; });
+    makeBtn.onclick = async () => {
+      if (!await saveNow()) return toast('請先把活動資料填寫完整');
+      const dates = xd.dates().filter((d) => d !== e.start);
+      if (!dates.length) return;
+      const len = e.end && e.end > e.start ? dayDiff(e.start, e.end) : 0;
+      makeBtn.disabled = true;
+      try {
+        const base = { ...(eventCache || []).find((x) => x.id === e.id) };
+        delete base.id;
+        for (const d of dates) {
+          const copy = { ...base, start: d, end: len ? addDays(d, len) : '', repeat: '', repeatUntil: '', createdAt: Date.now(), updatedAt: Date.now() };
+          const nid = newId('e');
+          await fb.setDoc(fb.doc(db, COL.events, nid), copy);
+          if (eventCache) eventCache.push({ ...copy, id: nid });
+        }
+        if (eventCache) eventCache.sort((x, y) => (x.start + (x.allDay ? '' : x.startTime || '')).localeCompare(y.start + (y.allDay ? '' : y.startTime || '')));
+        toast(`已複製到 ${dates.map(dateLabel).join('、')}${e.published ? '' : '（都是草稿）'}`);
+        xd.clear();
+      } catch (err) { toast('複製失敗：' + (err.code || err.message)); makeBtn.disabled = false; }
+    };
     f.addEventListener('input', (ev) => {
+      if (ev.target.name === 'xdate') return; // 複製日期不影響這個活動本身
       if (ev.target.name === 'description') {
         const pv = app.querySelector('#epv');
         pv.hidden = !ev.target.value.trim();
@@ -1367,6 +1420,7 @@ pages.eventEdit = async (app, id, query = {}) => {
       autosave(1000);
     });
     f.addEventListener('change', (ev) => {
+      if (ev.target.name === 'xdate') return;
       if (ev.target.name === 'allDay') app.querySelector('#times').hidden = ev.target.checked;
       if (['repeat', 'start', 'repeatUntil'].includes(ev.target.name)) {
         collect();
@@ -1381,7 +1435,8 @@ pages.eventEdit = async (app, id, query = {}) => {
     app.querySelector('#notify-open').onclick = async () => {
       const ok = await saveNow();
       if (!ok) return toast('請先把活動資料填寫完整');
-      openNotify(app.querySelector('#notify'), { ...e });
+      await openNotify(app.querySelector('#notify'), { ...e });
+      app.querySelector('#notify').scrollIntoView({ behavior: 'smooth', block: 'start' });
     };
     app.querySelector('#del').onclick = async () => {
       if (!confirm(`確定刪除「${e.title || '這個活動'}」？此動作無法復原。`)) return;
@@ -1968,6 +2023,34 @@ function sessionOccurrences(from, to) {
   return mySessions.map((it, k) => ({ it, k, r: sessionRef(it) })).filter(({ it, r }) => r && it.date >= from && it.date <= to)
     .map(({ it, k, r }) => ({ id: r.c.id, lid: r.l.id, k, session: true, study: true, title: r.l.title, course: r.c.title, start: it.date, end: '', startTime: it.time, endTime: addMinutes(it.time, it.minutes || 30), type: '我的學習' }));
 }
+// 「複製到其他天」的日期列（單元課程、活動共用）：新的一天接在最後一天後面
+const xdateTools = (label = '複製到其他天') => '<div class="xdates" aria-live="polite"></div>' +
+  `<p class="xdate-add small"><span class="muted">${label}：</span><button type="button" class="link small" data-xd="1">＋ 隔天</button>` +
+  '<button type="button" class="link small" data-xd="7">＋ 下週同一天</button><button type="button" class="link small" data-xd="0">＋ 自選日期</button></p>';
+// root：包含 xdateTools 的元素；baseDate()：目前的主要日期。回傳 { dates()、clear() }
+function bindXdates(root, baseDate, onChange = () => {}) {
+  const box = root.querySelector('.xdates');
+  const inputs = () => [...box.querySelectorAll('[name=xdate]')];
+  const lastDay = () => [baseDate(), ...inputs().map((x) => x.value)].filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d)).sort().pop() || todayStr();
+  root.addEventListener('click', (e) => {
+    const add = e.target.closest('[data-xd]'), rm = e.target.closest('[data-xd-rm]');
+    if (rm) { rm.closest('.xdate-row').remove(); return onChange(); }
+    if (!add) return;
+    if (box.children.length >= 60) return toast('一次最多複製 60 天');
+    const n = +add.dataset.xd, d = n ? addDays(lastDay(), n) : '';
+    const row = document.createElement('div');
+    row.className = 'xdate-row';
+    row.innerHTML = `<input class="input" type="date" name="xdate" value="${esc(d)}" aria-label="也排在這一天"/><button type="button" class="icon-btn" data-xd-rm aria-label="不要這一天" title="不要這一天">✕</button>`;
+    box.appendChild(row);
+    if (!d) row.querySelector('input').focus();
+    onChange();
+  });
+  return {
+    dates: () => [...new Set(inputs().map((x) => x.value).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d)))].sort(),
+    clear: () => { box.innerHTML = ''; onChange(); }
+  };
+}
+
 // 加入／修改單元課程：日期、時間、時長；回傳 true 表示有修改
 // addNew = true：一定是「再加一堂」（上課頁右側的勾勾），不會改到已經排好的
 async function editSession(c, l, idx, addNew = false) {
@@ -1987,9 +2070,7 @@ async function editSession(c, l, idx, addNew = false) {
       `<div class="two"><label>日期<input class="input" type="date" name="date" value="${esc(cur.date)}" required/></label>` +
       `<label>時間<input class="input" type="time" name="time" value="${esc(cur.time)}" required/></label></div>` +
       // 複製到不同天：同一堂課、同一個時間，一次排好幾天
-      '<div class="xdates" aria-live="polite"></div>' +
-      '<p class="xdate-add small"><span class="muted">複製到其他天：</span><button type="button" class="link small" data-act="add-day">＋ 隔天</button>' +
-      '<button type="button" class="link small" data-act="add-week">＋ 下週同一天</button><button type="button" class="link small" data-act="add-any">＋ 自選日期</button></p>' +
+      xdateTools() +
       `<label>預計<select class="input" name="minutes">${mins.map((m) => `<option value="${m}" ${m === cur.minutes ? 'selected' : ''}>${m} 分鐘</option>`).join('')}</select></label>` +
       '<div class="lesson-nav"><button class="btn btn-sm">儲存</button>' +
       (k > -1 ? `<a class="btn btn-ghost btn-sm" href="#/learn/${esc(c.id)}/${esc(l.id)}" data-act="go">▶ 去上課</a><button type="button" class="btn btn-ghost btn-sm" data-act="copy">📋 複製</button><button type="button" class="btn btn-ghost btn-sm" data-act="gcal">＋ 加入 Google 日曆</button><button type="button" class="btn btn-ghost btn-sm" data-act="del">從課表移除</button>` : '') +
@@ -2000,24 +2081,10 @@ async function editSession(c, l, idx, addNew = false) {
       try { await saveSessions(list); toast(msg); return true; }
       catch (err) { toast('儲存失敗：' + (err.code || err.message) + '（請確認已部署最新的 Firestore 規則）'); return false; }
     };
-    // 其他天的日期列：新的一天接在最後一天後面
-    const xbox = box.querySelector('.xdates');
-    const lastDay = () => { const all = [box.querySelector('[name=date]').value, ...[...xbox.querySelectorAll('[name=xdate]')].map((x) => x.value)].filter(Boolean).sort(); return all[all.length - 1] || todayStr(); };
-    const addDay = (d) => {
-      if (xbox.children.length >= 60) return toast('一次最多複製 60 天');
-      const row = document.createElement('div');
-      row.className = 'xdate-row';
-      row.innerHTML = `<input class="input" type="date" name="xdate" value="${esc(d)}" aria-label="也排在這一天" required/><button type="button" class="icon-btn" data-act="rm-day" aria-label="不要這一天" title="不要這一天">✕</button>`;
-      xbox.appendChild(row);
-      if (!d) row.querySelector('input').focus();
-    };
+    bindXdates(box, () => box.querySelector('[name=date]').value);
     box.onclick = async (e) => {
       const act = e.target === box ? 'x' : e.target.dataset.act;
       if (act === 'x') return close(false);
-      if (act === 'add-day') return addDay(addDays(lastDay(), 1));
-      if (act === 'add-week') return addDay(addDays(lastDay(), 7));
-      if (act === 'add-any') return addDay('');
-      if (act === 'rm-day') return e.target.closest('.xdate-row').remove();
       if (act === 'go') { e.preventDefault(); close(false); return go(`/learn/${c.id}/${l.id}`); }
       if (act === 'gcal') return addToGoogleCalendar([gcalSessionOf(mySessions[k], c, l)], null, e.target);
       if (act === 'copy') { const it = mySessions[k]; setPlanClip({ kind: 'unit', c: c.id, l: l.id, time: it.time, minutes: it.minutes || 30, label: `${l.title} ${it.time}` }); return close(false); }
