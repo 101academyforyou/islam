@@ -1953,6 +1953,10 @@ async function editSession(c, l, idx, addNew = false) {
       (k < 0 && already.length ? `<p class="small already">✓ 已經排了：${already.map((it) => esc(`${dateLabel(it.date)} ${it.time}`)).join('、')}<br><span class="muted">這次會再加一堂；要修改或移除已排的，請到「我的課表」點那一堂。</span></p>` : '') +
       `<div class="two"><label>日期<input class="input" type="date" name="date" value="${esc(cur.date)}" required/></label>` +
       `<label>時間<input class="input" type="time" name="time" value="${esc(cur.time)}" required/></label></div>` +
+      // 複製到不同天：同一堂課、同一個時間，一次排好幾天
+      '<div class="xdates" aria-live="polite"></div>' +
+      '<p class="xdate-add small"><span class="muted">複製到其他天：</span><button type="button" class="link small" data-act="add-day">＋ 隔天</button>' +
+      '<button type="button" class="link small" data-act="add-week">＋ 下週同一天</button><button type="button" class="link small" data-act="add-any">＋ 自選日期</button></p>' +
       `<label>預計<select class="input" name="minutes">${mins.map((m) => `<option value="${m}" ${m === cur.minutes ? 'selected' : ''}>${m} 分鐘</option>`).join('')}</select></label>` +
       '<div class="lesson-nav"><button class="btn btn-sm">儲存</button>' +
       (k > -1 ? `<a class="btn btn-ghost btn-sm" href="#/learn/${esc(c.id)}/${esc(l.id)}" data-act="go">▶ 去上課</a><button type="button" class="btn btn-ghost btn-sm" data-act="copy">📋 複製</button><button type="button" class="btn btn-ghost btn-sm" data-act="gcal">＋ 加入 Google 日曆</button><button type="button" class="btn btn-ghost btn-sm" data-act="del">從課表移除</button>` : '') +
@@ -1963,9 +1967,24 @@ async function editSession(c, l, idx, addNew = false) {
       try { await saveSessions(list); toast(msg); return true; }
       catch (err) { toast('儲存失敗：' + (err.code || err.message) + '（請確認已部署最新的 Firestore 規則）'); return false; }
     };
+    // 其他天的日期列：新的一天接在最後一天後面
+    const xbox = box.querySelector('.xdates');
+    const lastDay = () => { const all = [box.querySelector('[name=date]').value, ...[...xbox.querySelectorAll('[name=xdate]')].map((x) => x.value)].filter(Boolean).sort(); return all[all.length - 1] || todayStr(); };
+    const addDay = (d) => {
+      if (xbox.children.length >= 60) return toast('一次最多複製 60 天');
+      const row = document.createElement('div');
+      row.className = 'xdate-row';
+      row.innerHTML = `<input class="input" type="date" name="xdate" value="${esc(d)}" aria-label="也排在這一天" required/><button type="button" class="icon-btn" data-act="rm-day" aria-label="不要這一天" title="不要這一天">✕</button>`;
+      xbox.appendChild(row);
+      if (!d) row.querySelector('input').focus();
+    };
     box.onclick = async (e) => {
       const act = e.target === box ? 'x' : e.target.dataset.act;
       if (act === 'x') return close(false);
+      if (act === 'add-day') return addDay(addDays(lastDay(), 1));
+      if (act === 'add-week') return addDay(addDays(lastDay(), 7));
+      if (act === 'add-any') return addDay('');
+      if (act === 'rm-day') return e.target.closest('.xdate-row').remove();
       if (act === 'go') { e.preventDefault(); close(false); return go(`/learn/${c.id}/${l.id}`); }
       if (act === 'gcal') return addToGoogleCalendar([gcalSessionOf(mySessions[k], c, l)], null, e.target);
       if (act === 'copy') { const it = mySessions[k]; setPlanClip({ kind: 'unit', c: c.id, l: l.id, time: it.time, minutes: it.minutes || 30, label: `${l.title} ${it.time}` }); return close(false); }
@@ -1976,9 +1995,14 @@ async function editSession(c, l, idx, addNew = false) {
       const f = e.target;
       if (!f.date.value || !f.time.value) return toast('請選擇日期和時間');
       const v = { c: c.id, l: l.id, date: f.date.value, time: f.time.value, minutes: +f.minutes.value };
-      if (mySessions.length >= 500 && k < 0) return toast('單元課程最多 500 堂');
-      const list = k > -1 ? mySessions.map((x, i) => (i === k ? v : x)) : [...mySessions, v];
-      if (await save(list, k > -1 ? '已更新單元課程' : `已加入我的課表：${sessionText(v)}`)) close(true);
+      // 複製到其他天：跳過空白、重複，和已經排在同一天同一時間的
+      const taken = new Set([v.date, ...mySessions.filter((x, i) => i !== k && x.c === c.id && x.l === l.id && x.time === v.time).map((x) => x.date)]);
+      const extra = [...f.querySelectorAll('[name=xdate]')].map((x) => x.value).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d) && !taken.has(d) && taken.add(d))
+        .sort().map((d) => ({ ...v, date: d }));
+      if (mySessions.length + extra.length + (k < 0 ? 1 : 0) > 500) return toast('單元課程最多 500 堂');
+      const list = [...(k > -1 ? mySessions.map((x, i) => (i === k ? v : x)) : [...mySessions, v]), ...extra];
+      const msg = extra.length ? `${k > -1 ? '已更新，並' : '已'}加入我的課表：${dateLabel(v.date)} 等 ${extra.length + 1} 天 ${v.time}` : k > -1 ? '已更新單元課程' : `已加入我的課表：${sessionText(v)}`;
+      if (await save(list, msg)) close(true);
     };
     document.addEventListener('keydown', onKey);
     document.body.appendChild(box);

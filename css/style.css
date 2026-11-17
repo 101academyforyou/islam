@@ -604,3 +604,8 @@ table.orders th { font-size: 12px; color: var(--muted); background: var(--soft);
 /* 在 App 內建瀏覽器開啟時的提醒 */
 .notice-warn { background: color-mix(in srgb, #f59e0b 14%, var(--card)); border: 1px solid color-mix(in srgb, #f59e0b 45%, transparent); line-height: 1.6; }
 .notice-warn .lesson-nav { margin: 8px 0 4px; }
+/* 單元課程：複製到其他天 */
+.xdates { display: grid; gap: 6px; margin: 4px 0 2px; }
+.xdate-row { display: flex; gap: 6px; align-items: center; }
+.xdate-row .input { flex: 1; margin: 0; }
+.xdate-add { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; margin: 2px 0 10px; }
