@@ -741,30 +741,32 @@ body.no-select { user-select: none; }
 @keyframes cal-slide-next { from { opacity: .3; transform: translateY(28px); } to { opacity: 1; transform: none; } }
 @keyframes cal-slide-prev { from { opacity: .3; transform: translateY(-28px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .cal-grid.slide-next, .cal-grid.slide-prev { animation: none; } }
-/* 首頁：禮拜時間（沿用頁面背景，五個金色圓圈） */
+/* 首頁：禮拜時間（和網站一致：白色卡片、主色藍） */
 .pt-wrap { margin: -6px 0 22px; }
-.pt-band { --gold: #b8893c; position: relative; padding: 6px 0 4px; color: var(--text); }
+.pt-band { position: relative; color: var(--text); }
+.pt-band > .container > * { position: relative; }
+.pt-band > .container { background: var(--card); border: 1px solid var(--border); border-radius: 18px; padding: 16px 20px 12px; box-shadow: 0 10px 30px -22px rgba(15, 23, 42, .35); }
 .pt-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px 12px; flex-wrap: wrap; margin-bottom: 14px; }
-.pt-title { font-weight: 800; font-size: 1.08rem; letter-spacing: .02em; }
+.pt-title { font-weight: 800; font-size: 1.08rem; }
 .pt-date { font-weight: 500; font-size: .9rem; color: var(--muted); margin-left: 4px; }
 .pt-tools { display: flex; gap: 6px; flex-wrap: wrap; }
-.pt-chip { display: inline-flex; align-items: center; gap: 4px; padding: 4px 12px; border-radius: 999px; border: 1px solid var(--border); background: var(--card); color: var(--text); font: inherit; font-size: .88rem; cursor: pointer; }
-.pt-chip:hover { border-color: var(--gold); }
+.pt-chip { display: inline-flex; align-items: center; gap: 4px; height: 34px; box-sizing: border-box; padding: 0 12px; border-radius: 10px; border: 1px solid var(--border); background: var(--soft); color: var(--text); font: inherit; font-size: .88rem; cursor: pointer; }
+.pt-chip:hover { border-color: var(--primary); }
 .pt-chip select { border: 0; background: transparent; color: var(--text); font: inherit; cursor: pointer; padding: 0; }
-.pt-circles { display: flex; justify-content: center; gap: clamp(8px, 3vw, 34px); flex-wrap: nowrap; }
-.pt-c { width: clamp(64px, 17vw, 112px); aspect-ratio: 1; border-radius: 50%; border: 2px solid var(--gold); background: var(--card); color: var(--gold); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; text-align: center; transition: transform .2s; }
-.pt-c b { font: 800 clamp(11px, 2.6vw, 16px) Inter, sans-serif; letter-spacing: .04em; }
+.pt-circles { display: flex; justify-content: center; gap: clamp(8px, 3vw, 30px); flex-wrap: nowrap; }
+.pt-c { width: clamp(62px, 16vw, 106px); aspect-ratio: 1; border-radius: 50%; border: 2px solid color-mix(in srgb, var(--primary) 45%, var(--border)); background: var(--card); color: var(--primary); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; text-align: center; transition: transform .2s; }
+.pt-c b { font: 800 clamp(11px, 2.6vw, 15px) Inter, sans-serif; letter-spacing: .04em; }
 .pt-c span { font-size: clamp(10px, 2.4vw, 13px); color: var(--muted); }
 .pt-c strong { font: 700 clamp(13px, 3.2vw, 20px) Inter, sans-serif; font-variant-numeric: tabular-nums; color: var(--text); }
-.pt-c.past { opacity: .55; }
-.pt-c.next { background: var(--gold); border-color: var(--gold); color: #fff; transform: scale(1.07); box-shadow: 0 8px 22px -8px rgba(120, 85, 20, .55); }
+.pt-c.past { opacity: .5; }
+.pt-c.next { background: var(--grad); border-color: transparent; color: #fff; transform: scale(1.07); box-shadow: 0 10px 22px -10px color-mix(in srgb, var(--primary) 70%, transparent); }
 .pt-c.next span, .pt-c.next strong { color: #fff; }
 .pt-next { margin: 14px 0 2px; text-align: center; font-size: .95rem; }
-.pt-next strong { color: var(--gold); }
+.pt-next strong { color: var(--primary); }
 .pt-next .pt-count { font-family: Inter, sans-serif; font-variant-numeric: tabular-nums; }
 .pt-sep { margin: 0 8px; color: var(--muted); }
 .pt-note { margin: 2px 0 0; text-align: center; font-size: 11.5px; color: var(--muted); }
-@media (max-width: 480px) { .pt-c b { letter-spacing: 0; font-size: 10.5px; } }
+@media (max-width: 480px) { .pt-c b { letter-spacing: 0; font-size: 10.5px; } .pt-band > .container { border-radius: 0; border-left: 0; border-right: 0; } }
 /* 本月禮拜時間表 */
 .pt-modal { width: min(680px, 100%); }
 .pt-table-wrap { max-height: 60vh; overflow: auto; margin: 10px 0; border: 1px solid var(--border); border-radius: 10px; }
