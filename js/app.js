@@ -1449,7 +1449,7 @@ pages.eventEdit = async (app, id, query = {}) => {
       // 複製到指定日期：每個日期各建立一個單次活動（內容、時間都一樣）
       '<div class="card pad copy-card"><h3>📋 複製到其他日期 <span class="muted small">可留空</span></h3>' +
       '<p class="muted small">同樣的活動要在別天再辦一次？加上日期後按「建立複製」，每個日期會各建立一個<strong>單次</strong>活動（標題、時間、地點、說明都一樣，之後可以分別修改）。固定每週、每月的活動請用上面的「重複」。</p>' +
-      xdateTools('加入日期') + '<button type="button" class="btn btn-sm" id="copy-make" disabled>建立複製</button></div>' +
+      xdateTools('① 先加入日期') + '<p class="small copy-step"><button type="button" class="btn btn-sm" id="copy-make">② 建立複製</button> <span class="muted" id="copy-hint">還沒加入日期</span></p></div>' +
       '<div class="editor-actions"><span class="autosave muted small" id="autosave">修改後會自動儲存</span>' +
       '<button class="btn" id="save">完成，查看活動 →</button>' +
       '<button type="button" class="btn btn-ghost" id="del">刪除活動</button></div></form>' +
@@ -1495,14 +1495,19 @@ pages.eventEdit = async (app, id, query = {}) => {
     const f = app.querySelector('#ee');
     // 複製到其他日期
     const makeBtn = app.querySelector('#copy-make');
-    const xd = bindXdates(app.querySelector('.copy-card'), () => f.start.value, () => {
+    const hint = app.querySelector('#copy-hint');
+    const count = () => {
       const n = xd ? xd.dates().filter((d) => d !== f.start.value).length : 0;
-      makeBtn.disabled = !n;
-      makeBtn.textContent = n ? `建立複製（${n} 個）` : '建立複製';
-    });
-    app.querySelector('.copy-card').addEventListener('input', () => { const n = xd.dates().filter((d) => d !== f.start.value).length; makeBtn.disabled = !n; makeBtn.textContent = n ? `建立複製（${n} 個）` : '建立複製'; });
+      makeBtn.textContent = n ? `② 建立複製（${n} 個）` : '② 建立複製';
+      hint.textContent = n ? `會在 ${xd.dates().filter((d) => d !== f.start.value).map(dateLabel).join('、')} 各建立一個活動` : '還沒加入日期';
+    };
+    const xd = bindXdates(app.querySelector('.copy-card'), () => f.start.value, () => count());
+    app.querySelector('.copy-card').addEventListener('input', count);
+    app.querySelector('.copy-card').addEventListener('change', count);
     makeBtn.onclick = async () => {
-      if (!await saveNow()) return toast('請先把活動資料填寫完整');
+      const pending = xd.dates().filter((d) => d !== f.start.value);
+      if (!pending.length) { toast('請先按上面的「＋ 隔天」「＋ 下週同一天」或「＋ 自選日期」加入要複製的日期'); return app.querySelector('.copy-card [data-xd="1"]').focus(); }
+      if (!await saveNow()) return toast('請先把活動資料填寫完整（看看下方「自動儲存」的提示）');
       const dates = xd.dates().filter((d) => d !== e.start);
       if (!dates.length) return;
       const len = e.end && e.end > e.start ? dayDiff(e.start, e.end) : 0;
@@ -1519,6 +1524,7 @@ pages.eventEdit = async (app, id, query = {}) => {
         if (eventCache) eventCache.sort((x, y) => (x.start + (x.allDay ? '' : x.startTime || '')).localeCompare(y.start + (y.allDay ? '' : y.startTime || '')));
         toast(`已複製到 ${dates.map(dateLabel).join('、')}${e.published ? '' : '（都是草稿）'}`);
         xd.clear();
+        makeBtn.disabled = false;
       } catch (err) { toast('複製失敗：' + (err.code || err.message)); makeBtn.disabled = false; }
     };
     f.addEventListener('input', (ev) => {
@@ -2164,7 +2170,7 @@ function bindXdates(root, baseDate, onChange = () => {}) {
     row.className = 'xdate-row';
     row.innerHTML = `<input class="input" type="date" name="xdate" value="${esc(d)}" aria-label="也排在這一天"/><button type="button" class="icon-btn" data-xd-rm aria-label="不要這一天" title="不要這一天">✕</button>`;
     box.appendChild(row);
-    if (!d) row.querySelector('input').focus();
+    if (!d) { const inp = row.querySelector('input'); inp.focus(); try { inp.showPicker && inp.showPicker(); } catch (err) { /* 有些瀏覽器不支援 */ } }
     onChange();
   });
   return {
