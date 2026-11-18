@@ -737,3 +737,10 @@ body.no-select { user-select: none; }
 .disclaimer { margin: 12px 0 18px; padding: 8px 12px; border-radius: 10px; background: var(--soft); color: var(--muted); line-height: 1.6; }
 .modal .disclaimer { margin: 12px 0 0; }
 .copy-step { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 8px 0 0; }
+/* 月曆上下滑動切換月份 */
+.cal-grid { overscroll-behavior: contain; }
+.cal-grid.slide-next { animation: cal-slide-next .28s ease-out; }
+.cal-grid.slide-prev { animation: cal-slide-prev .28s ease-out; }
+@keyframes cal-slide-next { from { opacity: .3; transform: translateY(28px); } to { opacity: 1; transform: none; } }
+@keyframes cal-slide-prev { from { opacity: .3; transform: translateY(-28px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .cal-grid.slide-next, .cal-grid.slide-prev { animation: none; } }
