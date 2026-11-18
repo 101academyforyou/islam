@@ -736,3 +736,4 @@ body.no-select { user-select: none; }
 /* 活動免責說明 */
 .disclaimer { margin: 12px 0 18px; padding: 8px 12px; border-radius: 10px; background: var(--soft); color: var(--muted); line-height: 1.6; }
 .modal .disclaimer { margin: 12px 0 0; }
+.copy-step { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 8px 0 0; }
