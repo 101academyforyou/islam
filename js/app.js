@@ -675,7 +675,7 @@ function metroHtml(path, joinBtn, width) {
       return `<div class="mt-st ${state}${c === here ? ' here' : ''}${i === 0 && gi > 0 ? ' transfer' : ''}" style="grid-row:${r + 1};grid-column:${col}">` +
         `<a class="mt-dot" href="#/course/${c.id}" aria-label="${sid} ${esc(c.title)}">${state === 'done' ? '✓' : ''}</a>` +
         `<a class="mt-label" href="#/course/${c.id}">` +
-        (c === here ? `<span class="mt-here">📍 ${user ? '你在這裡' : '從這裡開始'}</span>` : first ? '<span class="mt-end">🚩 起點</span>' : '') +
+        (first ? '<span class="mt-end">🚩 起點</span>' : '') +
         (last && c !== here ? '<span class="mt-end">🏁 終點</span>' : '') +
         `<span class="mt-code">${sid}</span><strong class="mt-name">${esc(c.title)}</strong>` +
         `<span class="mt-meta">${lessonsOf(c).length} 個單元${mine ? ` · ${p === 100 ? '已完成' : `進度 ${p}%`}` : joinCount[c.id] > 0 ? ' · ' + countText(c) : ''}${c.published === false ? ' · 未上架' : ''}</span></a>` +
@@ -739,6 +739,7 @@ const PT_CITIES = [['台北', 25.033, 121.565], ['新北', 25.012, 121.465], ['�
   ['苗栗', 24.560, 120.821], ['台中', 24.147, 120.674], ['彰化', 24.081, 120.538], ['南投', 23.910, 120.684], ['雲林', 23.709, 120.431], ['嘉義', 23.480, 120.449],
   ['台南', 22.999, 120.227], ['高雄', 22.627, 120.301], ['屏東', 22.669, 120.486], ['宜蘭', 24.757, 121.753], ['花蓮', 23.987, 121.601], ['台東', 22.756, 121.144],
   ['澎湖', 23.571, 119.579], ['金門', 24.432, 118.317], ['馬祖', 26.160, 119.950], ['香港', 22.319, 114.169]];
+const PT_EN = { fajr: 'FAJR', dhuhr: 'DHUHR', asr: 'ASR', maghrib: 'MAGHRIB', isha: 'ISHA' };
 const PT_NAMES = [['fajr', '晨禮'], ['sunrise', '日出'], ['dhuhr', '晌禮'], ['asr', '晡禮'], ['maghrib', '昏禮'], ['isha', '宵禮']];
 const ptMath = (() => {
   const dtr = (d) => d * Math.PI / 180, rtd = (r) => r * 180 / Math.PI;
@@ -764,13 +765,7 @@ const ptMath = (() => {
     }
     return Object.fromEntries(Object.entries(t).map(([k, v]) => [k, v + tz - lng / 15]));
   }
-  // 太陽高度（度），畫弧線用
-  function altitude(y, m, d, lat, lng, tz, hour) {
-    const { decl, eqt } = sunPos(julian(y, m, d) - lng / 360 + hour / 24);
-    const H = 15 * (hour - (12 - eqt + tz - lng / 15));
-    return asin(sin(lat) * sin(decl) + cos(lat) * cos(decl) * cos(H));
-  }
-  return { times, altitude };
+  return { times };
 })();
 const ptHm = (h) => { const m = Math.round(h * 60); return pad2(Math.floor(m / 60) % 24) + ':' + pad2(m % 60); };
 const WEATHER_ICON = (c) => (c === 0 ? '☀️' : c <= 2 ? '🌤' : c === 3 ? '☁️' : c <= 48 ? '🌫' : c <= 67 || (c >= 80 && c <= 82) ? '🌧' : c <= 77 || c === 85 || c === 86 ? '🌨' : '⛈');
@@ -787,21 +782,6 @@ function prayerWidget(box) {
     fetch(`https://api.open-meteo.com/v1/forecast?latitude=${place.lat}&longitude=${place.lng}&current=temperature_2m,relative_humidity_2m,weather_code&timezone=auto`)
       .then((r) => (r.ok ? r.json() : null)).then((d) => { if (d && d.current) { weather = d.current; draw(); } }).catch(() => {});
   };
-  function arcSvg(t, nowH) {
-    const W = 420, Hh = 150, base = 90, from = Math.floor(t.fajr) - 1, to = Math.ceil(t.isha) + 1;
-    const now = new Date(), Y = now.getFullYear(), M = now.getMonth() + 1, D = now.getDate();
-    const alt = (h) => ptMath.altitude(Y, M, D, place.lat, place.lng, tzOf(), h);
-    const peak = Math.max(10, alt(t.dhuhr));
-    const X = (h) => ((h - from) / (to - from)) * W, Yp = (h) => base - (alt(h) / peak) * (base - 18);
-    const pts = []; for (let h = from; h <= to + 0.001; h += 0.25) pts.push([X(h), Yp(h)]);
-    const path = (list) => list.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' ');
-    const past = pts.filter((p) => p[0] <= X(nowH)), cur = nowH >= from && nowH <= to;
-    const dots = PT_NAMES.filter(([k]) => k !== 'sunrise').map(([k]) => `<circle cx="${X(t[k]).toFixed(1)}" cy="${Yp(t[k]).toFixed(1)}" r="5.5" class="${t[k] <= nowH ? 'pt-done' : 'pt-todo'}"/>`).join('');
-    return `<svg class="pt-arc" viewBox="0 0 ${W} ${Hh}" preserveAspectRatio="none" aria-hidden="true">` +
-      `<line x1="0" y1="${base}" x2="${W}" y2="${base}" class="pt-horizon"/>` +
-      `<path d="${path(pts)}" class="pt-curve"/>` + (past.length > 1 ? `<path d="${path(past)}" class="pt-curve walked"/>` : '') + dots +
-      (cur ? `<g class="pt-sun" transform="translate(${X(nowH).toFixed(1)},${Yp(nowH).toFixed(1)})"><circle r="9"/>${alt(nowH) > 0 ? '<circle r="14" class="ray"/>' : ''}</g>` : '') + '</svg>';
-  }
   // 現在的狀態：下一拜、還剩幾秒
   function state() {
     const now = new Date(), nowH = now.getHours() + now.getMinutes() / 60 + now.getSeconds() / 3600;
@@ -825,16 +805,18 @@ function prayerWidget(box) {
     if (!box.isConnected) return clearInterval(timer);
     const { nowH, t, next, left, now } = state();
     shown = next[0] + now.getMinutes();
-    const curKey = [...PT_NAMES].reverse().find(([k]) => t[k] <= nowH)?.[0] || 'isha';
-    box.innerHTML = '<div class="card pt-card">' +
-      '<div class="pt-top"><span class="muted small">下一拜</span><span class="pt-pills">' +
-      (weather ? `<span class="pt-pill" title="目前天氣">${WEATHER_ICON(weather.weather_code)} <strong>${Math.round(weather.temperature_2m)}°</strong> 💧${Math.round(weather.relative_humidity_2m)}%</span>` : '') +
-      `<label class="pt-pill pt-place" title="選擇城市">📍 <select aria-label="選擇城市">${PT_CITIES.map(([n]) => `<option ${!place.mine && n === place.name ? 'selected' : ''}>${n}</option>`).join('')}<option value="__me" ${place.mine ? 'selected' : ''}>${place.mine ? '我的位置' : '📍 使用我的位置'}</option></select></label></span></div>` +
-      `<div class="pt-head"><h2>${next[1]}</h2><span class="pt-count" aria-label="距離${next[1]}還有">${countText(left)}</span></div>` +
-      arcSvg(t, nowH) +
-      `<div class="pt-row">${PT_NAMES.map(([k, n]) => `<div class="pt-cell${k === curKey ? ' cur' : ''}"><span>${n}</span><strong>${ptHm(t[k])}</strong></div>`).join('')}</div>` +
-      '<button type="button" class="pt-month">📅 本月禮拜時間表<span aria-hidden="true">›</span></button>' +
-      '<p class="muted pt-note">依天文公式計算（MWL），實際時間請以當地清真寺公告為準。</p></div>';
+    // 金色橫條＋伊斯蘭幾何花紋，五個圓圈：英文名、中文名、時間；下一拜的圓圈實心並顯示倒數
+    const five = PT_NAMES.filter(([k]) => k !== 'sunrise');
+    const today = `${now.getMonth() + 1}/${now.getDate()}（${WEEK[now.getDay()]}）`;
+    box.innerHTML = '<div class="pt-band"><div class="container">' +
+      `<div class="pt-bar"><span class="pt-title">🕌 今日禮拜時間 <span class="pt-date">${today}</span></span><span class="pt-tools">` +
+      `<label class="pt-chip" title="選擇城市">📍 <select aria-label="選擇城市">${PT_CITIES.map(([n]) => `<option ${!place.mine && n === place.name ? 'selected' : ''}>${n}</option>`).join('')}<option value="__me" ${place.mine ? 'selected' : ''}>${place.mine ? '我的位置' : '📍 使用我的位置'}</option></select></label>` +
+      (weather ? `<span class="pt-chip" title="目前天氣">${WEATHER_ICON(weather.weather_code)} ${Math.round(weather.temperature_2m)}° · 💧${Math.round(weather.relative_humidity_2m)}%</span>` : '') +
+      '<button type="button" class="pt-chip pt-month">📅 本月時間表</button></span></div>' +
+      '<div class="pt-circles">' + five.map(([k, n]) => `<div class="pt-c${k === next[0] ? ' next' : ''}${t[k] <= nowH && k !== next[0] && nowH < t.isha ? ' past' : ''}" title="${n} ${ptHm(t[k])}">` +
+        `<b>${PT_EN[k]}</b><span>${n}</span><strong>${ptHm(t[k])}</strong></div>`).join('') + '</div>' +
+      `<p class="pt-next">下一拜 <strong>${next[1]}</strong>，還有 <strong class="pt-count" aria-label="距離${next[1]}還有">${countText(left)}</strong><span class="pt-sep">·</span>日出 ${ptHm(t.sunrise)}<span class="pt-sep">·</span>${esc(place.name)}</p>` +
+      '<p class="pt-note">依天文公式計算（MWL），實際時間請以當地清真寺公告為準。</p></div></div>';
     box.querySelector('select').onchange = (e) => {
       const v = e.target.value;
       if (v === '__me') {
@@ -901,7 +883,7 @@ pages.home = (app) => {
     (learners > 0 ? `<span>${ICON.usersRound} 共 <strong>${learners.toLocaleString()}</strong> 人加入學習</span>` : '') + '</p>' +
     `<input class="input search" id="q" type="search" placeholder="${BLOG_ON ? '搜尋課程或文章…' : '搜尋課程…'}" aria-label="${BLOG_ON ? '搜尋課程或文章' : '搜尋課程'}" autocomplete="off" />` +
     '</div></section>' +
-    '<section class="container pt-wrap" id="prayer"></section>' +
+    '<section class="pt-wrap" id="prayer"></section>' +
     '<section class="container"><div class="row-between map-head"><h2>學習地圖</h2>' +
     '<span class="view-switch" role="group" aria-label="顯示方式"><button type="button" data-hview="map">🚇 路線圖</button><button type="button" data-hview="grid">▦ 方格</button></span></div>' +
     (cats.length ? '<div class="chips" id="chips"><button class="chip" data-cat="">全部</button>' +
