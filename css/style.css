@@ -733,3 +733,6 @@ body.no-select { user-select: none; }
 .site-logo-edit .site-logo { width: 72px; height: 72px; }
 .site-logo-edit > div:last-child { flex: 1; }
 .ev-allday { align-self: end; padding-bottom: 12px; }
+/* 活動免責說明 */
+.disclaimer { margin: 12px 0 18px; padding: 8px 12px; border-radius: 10px; background: var(--soft); color: var(--muted); line-height: 1.6; }
+.modal .disclaimer { margin: 12px 0 0; }
