@@ -670,12 +670,11 @@ function metroHtml(path, joinBtn, width) {
     const st = g.list.map((c, i) => {
       const r = Math.floor(i / cols), k = i % cols, col = cols === 1 ? 1 : r % 2 ? cols - k : k + 1;
       const mine = owns(c.id), p = mine ? progress(c) : 0, state = mine && p === 100 ? 'done' : mine ? 'going' : '';
-      const first = gi === 0 && i === 0, last = gi === groups.length - 1 && i === g.list.length - 1;
+      const last = gi === groups.length - 1 && i === g.list.length - 1;
       const sid = code + String(i + 1).padStart(2, '0');
       return `<div class="mt-st ${state}${c === here ? ' here' : ''}${i === 0 && gi > 0 ? ' transfer' : ''}" style="grid-row:${r + 1};grid-column:${col}">` +
         `<a class="mt-dot" href="#/course/${c.id}" aria-label="${sid} ${esc(c.title)}">${state === 'done' ? '✓' : ''}</a>` +
         `<a class="mt-label" href="#/course/${c.id}">` +
-        (first ? '<span class="mt-end">🚩 起點</span>' : '') +
         (last && c !== here ? '<span class="mt-end">🏁 終點</span>' : '') +
         `<span class="mt-code">${sid}</span><strong class="mt-name">${esc(c.title)}</strong>` +
         `<span class="mt-meta">${lessonsOf(c).length} 個單元${mine ? ` · ${p === 100 ? '已完成' : `進度 ${p}%`}` : joinCount[c.id] > 0 ? ' · ' + countText(c) : ''}${c.published === false ? ' · 未上架' : ''}</span></a>` +
