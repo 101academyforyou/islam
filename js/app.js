@@ -3119,7 +3119,8 @@ pages.admin = async (app, id, query, sub) => {
       '<div class="card pad notice-card"><strong>第一次使用：請先匯入課程</strong><p class="muted small">目前的課程資料來自網站內建檔案。按下面的按鈕把課程匯入資料庫後，就能在網站上直接編輯。</p>' +
       '<button class="btn btn-sm" id="import">匯入現有課程到資料庫</button></div>') +
     (coursesFromDb ? '<div class="row-between admin-sec-bar"><p class="muted small">按住方格拖曳可以調整順序，或拖到別的分類資料夾（= 學習地圖的分組和階段順序），放開後自動儲存。</p>' +
-      '<button type="button" class="btn btn-sm" id="sec-add">＋ 新增分類資料夾</button></div>' : '') +
+      '<span class="lesson-nav">' + (suggestPending() ? '<button type="button" class="btn btn-ghost btn-sm" id="sec-suggest">✨ 套用建議分類</button>' : '') +
+      '<button type="button" class="btn btn-sm" id="sec-add">＋ 新增分類資料夾</button></span></div>' : '') +
     groups.map((g, gi) => (g.name
       ? `<section class="admin-sec" data-sec="${esc(g.id)}"><div class="admin-sec-head"><strong>📁 ${esc(g.name)}</strong><span class="muted small">${g.list.length} 門課</span>` +
         (g.id ? '<span class="admin-sec-tools">' +
@@ -3174,6 +3175,7 @@ pages.admin = async (app, id, query, sub) => {
     } catch (err) { toast('儲存失敗：' + (err.code || err.message) + '（請確認已部署最新的 Firestore 規則）'); return false; }
   };
   app.onclick = async (e) => {
+    if (e.target.id === 'sec-suggest') { if (await applySuggestedMap()) pages.admin(app); return; }
     if (e.target.id === 'sec-add') {
       const name = (prompt('新的分類資料夾名稱（例如：入門、信仰、功修、生活）：') || '').trim().slice(0, 40);
       if (!name) return;
@@ -3265,6 +3267,68 @@ pages.admin = async (app, id, query, sub) => {
   app.onpointerup = end;
   app.onpointercancel = end;
 };
+
+/* 建議的學習地圖分類（依現有 30 門課的內容規劃）：8 條路線，依學習順序；每條路線裡由淺到深
+ * 課程用 id 對應（找不到時用課程名稱）；不在清單裡的課程放到最後的「其他課程」 */
+const SUGGESTED_MAP = [
+  ['認識伊斯蘭', [['cmv51cvynilq', '伊斯蘭介紹'], ['cmv51d9b44oh', 'Dr. Zakir Naik 問答系列'], ['cmv51f4a61ht', 'Interviews']]],
+  ['新穆斯林起步', [['cmv51a6z2z37', '2024 新穆斯林基礎課程'], ['cmv4sv18v5ty', '新入教穆斯林課程'], ['cmv5197qd132', '學習禮拜'], ['cmv4sw21b0rs', '新入教者須知系列']]],
+  ['信仰根基', [['cmv4sz30wbpq', 'Aqeedah 信仰根基'], ['cmv518mktjtk', '真主的九十九個尊名系列'], ['cmv516a40qiy', '山径2025斋月系列“与安拉同在”'], ['cmv515nzl7jv', '始与终系列'], ['cmv4ig93rhnx', '亡者啟示錄']]],
+  ['古蘭經', [['cmv5125r61ni', '古蘭經誦讀'], ['cmv4swzwgcgp', '開端章經文解析'], ['cmv519j9gg3i', '國權章導讀系列'], ['cmv50xqwfon4', '古蘭經經文解析']]],
+  ['先知與聖訓', [['cmv51chl7t04', '先知穆罕默德生平系列'], ['cmv51c46b1or', 'Al-Mutoon Hadith Course 2024'], ['cmv5148lrkwu', '脑威 40 圣训简明讲解-马伊萨老师']]],
+  ['功修與教法', [['cmv510alj5x1', '伊斯蘭教法學（Fiqh）'], ['cmv518ayxtod', '拜功教法學系列'], ['cmv518x0yy1e', '2025 朝覲訓練 Hajj Training']]],
+  ['心靈修養', [['cmv51ajgnpsx', '主麻演講 Khutbah'], ['cmv51dwv76dz', 'Dr. Omar Abdel Kafi 問答系列'], ['cmv5158w3xvt', '每日复兴系列'], ['cmv51ejarhsl', '山径/马伊萨中文视频'], ['cmv50yfjzpuk', '七天 Ruqyah 排毒療程']]],
+  ['生活與文化', [['cmv50vih7qsq', '清真哈拉真心話'], ['cmv519uw937k', '2024 伊斯蘭文化論壇系列—苑默文'], ['cmv511jhrlgj', '穆斯林兒童睡前故事']]]
+];
+const suggestFind = ([id, title]) => findCourse(id) || courses.find((c) => c.title.trim() === title);
+// 還沒套用過（資料夾名稱或課程位置跟建議不一樣）才顯示按鈕
+function suggestPending() {
+  const names = mapSections.map((x) => x.name);
+  if (SUGGESTED_MAP.some(([n]) => !names.includes(n))) return SUGGESTED_MAP.some(([, list]) => list.some(suggestFind));
+  return SUGGESTED_MAP.some(([n, list]) => list.some((x) => { const c = suggestFind(x); return c && sectionName(c) !== n; }));
+}
+// 先列出完整的建議讓管理者確認，按「套用」才寫入：建立 8 個資料夾，並設定每門課的資料夾和順序
+function applySuggestedMap() {
+  const plan = SUGGESTED_MAP.map(([name, list]) => ({ name, items: list.map((x) => ({ want: x[1], c: suggestFind(x) })) }));
+  const used = new Set(plan.flatMap((g) => g.items.map((x) => x.c && x.c.id).filter(Boolean)));
+  const rest = courses.filter((c) => !used.has(c.id));
+  return new Promise((resolve) => {
+    const box = document.createElement('div');
+    box.className = 'modal-backdrop';
+    box.innerHTML = '<div class="modal card pad suggest-modal" role="dialog" aria-modal="true" aria-labelledby="sg-title">' +
+      '<button type="button" class="modal-x" data-act="x" aria-label="關閉">✕</button>' +
+      '<h3 id="sg-title">✨ 套用建議分類</h3>' +
+      '<p class="muted small">會建立下面 8 條路線（分類資料夾），並把課程依序放好。原本的分類資料夾會被取代；課程本身、單元和學生資料都不會改變。之後還是可以自己拖曳調整。</p>' +
+      plan.map((g, gi) => { const [code, color] = METRO_LINES[gi % METRO_LINES.length]; return `<div class="sg-line" style="--line:${color}"><div class="sg-head"><span class="mt-badge">${code}</span><strong>${esc(g.name)}</strong></div><ol>` +
+        g.items.map((x) => `<li>${x.c ? esc(x.c.title) : `<span class="muted">（找不到「${esc(x.want)}」，略過）</span>`}</li>`).join('') + '</ol></div>'; }).join('') +
+      (rest.length ? `<div class="sg-line" style="--line:#94a3b8"><div class="sg-head"><strong>其他課程</strong><span class="muted small">不在建議清單裡的課程，保持原本的順序</span></div><ol>${rest.map((c) => `<li>${esc(c.title)}</li>`).join('')}</ol></div>` : '') +
+      '<div class="lesson-nav"><button type="button" class="btn" data-act="ok">套用</button><button type="button" class="btn btn-ghost" data-act="x">取消</button></div></div>';
+    const close = (v) => { box.remove(); resolve(v); };
+    box.onclick = async (e) => {
+      const act = e.target === box ? 'x' : e.target.dataset.act;
+      if (act === 'x') return close(false);
+      if (act !== 'ok') return;
+      e.target.disabled = true; e.target.textContent = '套用中…';
+      // 同名的資料夾沿用原本的 id，其他建新的
+      const sections = plan.map((g) => ({ id: (mapSections.find((x) => x.name === g.name) || {}).id || newId('s'), name: g.name }));
+      const order = [...plan.flatMap((g, gi) => g.items.filter((x) => x.c).map((x) => [x.c, sections[gi].id])), ...rest.map((c) => [c, ''])];
+      try {
+        await fb.setDoc(fb.doc(db, COL.meta, 'map'), { sections, updatedAt: Date.now() });
+        mapSections = sections;
+        const changed = order.map(([c, sec], k) => [c, { order: k, section: sec }]).filter(([c, u]) => c.order !== u.order || (c.section || '') !== u.section);
+        await Promise.all(changed.map(([c, u]) => fb.setDoc(fb.doc(db, COL.courses, c.id), u, { merge: true })));
+        changed.forEach(([c, u]) => Object.assign(c, u));
+        courses = order.map(([c]) => c);
+        toast('已套用建議分類，學習地圖已更新');
+        close(true);
+      } catch (err) {
+        e.target.disabled = false; e.target.textContent = '套用';
+        toast('套用失敗：' + (err.code || err.message) + '（請確認已部署最新的 Firestore 規則）');
+      }
+    };
+    document.body.appendChild(box);
+  });
+}
 
 const adminTabs = (cur) => '<div class="chips admin-tabs">' +
   `<a class="chip${cur === 'courses' ? ' active' : ''}" href="#/admin">課程管理（順序 = 學習地圖的階段）</a>` +
