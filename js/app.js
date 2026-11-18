@@ -627,7 +627,7 @@ function renderHeader() {
     // 標誌：往上的階梯（循序漸進）
     `<a href="#/" class="logo"><span class="logo-mark" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18"><path fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" d="M4 19h5v-5h5V9h5V5"/></svg></span>${esc(CONFIG.siteName || '循序漸進學伊斯蘭')}</a>` +
     '<nav>' +
-    '<a href="#/">學習地圖</a>' + (BLOG_ON ? '<a href="#/articles">文章</a>' : '') + (user ? '<a href="#/my">我的學習區</a><a href="#/plan">我的課表</a>' : '') + '<a href="#/calendar">行事曆</a>' +
+    '<a href="#/">學習地圖</a>' + (BLOG_ON ? '<a href="#/articles">文章</a>' : '') + (user ? '<a href="#/my">我的學習區</a><a href="#/plan">我的課表</a>' : '') + '<a href="#/calendar">行事曆</a><a href="#/links">相關網站</a>' +
     (user
       ? `${isAdmin() ? '<a href="#/admin">管理</a>' : ''}<a class="muted small user-name" href="#/account" title="帳號設定（${esc(user.email)}）">${esc(name)}</a><button class="link" id="logout">登出</button>`
       : '<a href="#/login" class="btn btn-sm">登入</a>') +
@@ -3824,6 +3824,126 @@ async function renamePosts(name) {
     } catch (e) { console.warn('留言名稱未更新', c.id, e); }
   }
 }
+
+/* ---------------- 相關網站 ----------------
+ * islam_meta/links = { groups: [{ name, sites: [{ name, desc, logo, web, ig, fb, yt }] }], updatedAt }
+ * 任何人都看得到；管理者可以在頁面上直接編輯（logo 可以貼圖片網址或上傳，沒有時自動用網站的圖示） */
+const DEFAULT_LINKS = [
+  { name: '台灣', sites: [
+    { name: '台灣伊斯蘭', desc: '', web: 'https://www.islamtaiwan.com/', ig: '', fb: '', yt: '', logo: '' },
+    { name: 'Al-Hadi 台灣', desc: '', web: '', ig: 'https://www.instagram.com/alhadi.tw', fb: '', yt: '', logo: '' },
+    { name: '台北清真寺', desc: '', web: 'https://www.taipeimosque.org.tw/', ig: '', fb: '', yt: '', logo: '' },
+    { name: '中國回教協會', desc: '', web: 'https://www.cmainroc.org.tw/index.html', ig: '', fb: '', yt: '', logo: '' }
+  ] },
+  { name: '海外', sites: [
+    { name: '香港伊斯蘭文化', desc: '', web: 'https://linktr.ee/islamicculturehk', ig: '', fb: '', yt: '', logo: '' },
+    { name: '中華回教博愛社（香港）', desc: '', web: 'https://www.islam.org.hk/e19/', ig: '', fb: '', yt: '', logo: '' }
+  ] }
+];
+const LINK_KINDS = [['web', 'WEB', '網站'], ['ig', 'IG', 'Instagram'], ['fb', 'FB', 'Facebook'], ['yt', 'YouTube', 'YouTube']];
+const okUrl = (u) => /^https?:\/\/\S+$/i.test(u || '');
+async function loadLinks() {
+  try {
+    const snap = await fb.getDoc(fb.doc(db, COL.meta, 'links'));
+    if (snap.exists() && Array.isArray(snap.data().groups)) return snap.data().groups;
+  } catch (e) { console.error(e); }
+  return JSON.parse(JSON.stringify(DEFAULT_LINKS));
+}
+// 網站的 logo：上傳的圖片、圖片網址，或自動抓網站圖示；都沒有時顯示第一個字
+function siteLogo(x) {
+  if (/^media:/.test(x.logo || '')) return `<img data-media="${esc(x.logo.slice(6))}" alt=""/>`;
+  if (okUrl(x.logo)) return `<img src="${esc(x.logo)}" alt="" loading="lazy" referrerpolicy="no-referrer"/>`;
+  const first = LINK_KINDS.map(([k]) => x[k]).find(okUrl);
+  let host = '';
+  try { host = first ? new URL(first).hostname : ''; } catch (e) {}
+  const letter = `<span class="site-letter">${esc((x.name || '?').trim().charAt(0))}</span>`;
+  return host ? `<img src="https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&sz=128" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'site-letter',textContent:${esc(JSON.stringify((x.name || '?').trim().charAt(0)))}}))"/>` : letter;
+}
+pages.links = async (app) => {
+  app.innerHTML = '<div class="container"><p class="muted">載入中…</p></div>';
+  let groups = await loadLinks();
+  if (!document.body.contains(app)) return;
+  let editing = false;
+  const card = (x) => `<div class="card site-card"><div class="site-logo">${siteLogo(x)}</div><strong class="site-name">${esc(x.name)}</strong>` +
+    (x.desc ? `<p class="muted small">${esc(x.desc)}</p>` : '') +
+    `<div class="site-links">${LINK_KINDS.filter(([k]) => okUrl(x[k])).map(([k, label, title]) => `<a class="site-btn site-${k}" href="${esc(x[k])}" target="_blank" rel="noopener" title="${title}：${esc(x.name)}">${label}</a>`).join('')}</div></div>`;
+  const field = (gi, si, k, label, ph = '') => `<label class="small">${label}<input class="input" data-g="${gi}" data-s="${si}" data-k="${k}" value="${esc(groups[gi].sites[si][k] || '')}" placeholder="${ph}"/></label>`;
+  const editSite = (x, gi, si) => '<div class="card pad site-edit">' +
+    `<div class="row-between"><strong>${esc(x.name || '新網站')}</strong><span class="lesson-nav">` +
+    `<button type="button" class="icon-btn" data-act="s-up" data-g="${gi}" data-s="${si}" title="往前">↑</button><button type="button" class="icon-btn" data-act="s-down" data-g="${gi}" data-s="${si}" title="往後">↓</button>` +
+    `<button type="button" class="btn btn-ghost btn-sm" data-act="s-del" data-g="${gi}" data-s="${si}">刪除</button></span></div>` +
+    '<div class="two">' + field(gi, si, 'name', '名稱') + field(gi, si, 'desc', '簡介（可留空）') + '</div>' +
+    '<div class="two">' + field(gi, si, 'web', '網站', 'https://…') + field(gi, si, 'ig', 'Instagram', 'https://www.instagram.com/…') + '</div>' +
+    '<div class="two">' + field(gi, si, 'fb', 'Facebook', 'https://www.facebook.com/…') + field(gi, si, 'yt', 'YouTube', 'https://www.youtube.com/…') + '</div>' +
+    `<div class="site-logo-edit"><div class="site-logo">${siteLogo(x)}</div><div>` + field(gi, si, 'logo', 'Logo 圖片網址 <span class="muted">可留空＝自動用網站圖示</span>', 'https://…') +
+    `<span class="lesson-nav"><button type="button" class="btn btn-ghost btn-sm" data-act="logo-up" data-g="${gi}" data-s="${si}">上傳 Logo</button>` +
+    (x.logo ? `<button type="button" class="btn btn-ghost btn-sm" data-act="logo-clear" data-g="${gi}" data-s="${si}">清除 Logo</button>` : '') + '</span></div></div></div>';
+  function draw() {
+    app.innerHTML = '<div class="container links-page"><div class="row-between"><h1>相關網站</h1>' +
+      (isAdmin() ? (editing ? '<span class="lesson-nav"><button type="button" class="btn btn-sm" data-act="save">儲存</button><button type="button" class="btn btn-ghost btn-sm" data-act="cancel">取消</button></span>'
+        : '<button type="button" class="btn btn-ghost btn-sm" data-act="edit">✎ 編輯相關網站</button>') : '') + '</div>' +
+      '<p class="muted">推薦的伊斯蘭相關網站與社群，點按鈕會在新分頁打開。</p>' +
+      (editing
+        ? groups.map((g, gi) => `<section class="links-group edit"><div class="row-between links-group-head"><label>分組名稱<input class="input" data-g="${gi}" data-k="group" value="${esc(g.name)}"/></label>` +
+            '<span class="lesson-nav">' + (gi > 0 ? `<button type="button" class="btn btn-ghost btn-sm" data-act="g-up" data-g="${gi}">↑ 往上</button>` : '') +
+            (gi < groups.length - 1 ? `<button type="button" class="btn btn-ghost btn-sm" data-act="g-down" data-g="${gi}">↓ 往下</button>` : '') +
+            `<button type="button" class="btn btn-ghost btn-sm" data-act="g-del" data-g="${gi}">刪除分組</button></span></div>` +
+            g.sites.map((x, si) => editSite(x, gi, si)).join('') +
+            `<button type="button" class="btn btn-ghost btn-sm" data-act="s-add" data-g="${gi}">＋ 新增網站</button></section>`).join('') +
+          '<p><button type="button" class="btn btn-ghost" data-act="g-add">＋ 新增分組</button></p>' +
+          '<input type="file" accept="image/*" hidden id="logo-file"/>'
+        : groups.filter((g) => g.sites.length).map((g) => `<section class="links-group"><h2>${esc(g.name)}</h2><div class="site-grid">${g.sites.map(card).join('')}</div></section>`).join('') ||
+          '<p class="muted">還沒有相關網站。</p>') +
+      '</div>';
+  }
+  const collect = () => app.querySelectorAll('input[data-k]').forEach((el) => {
+    const g = groups[+el.dataset.g];
+    if (el.dataset.k === 'group') g.name = el.value.trim(); else g.sites[+el.dataset.s][el.dataset.k] = el.value.trim();
+  });
+  let logoTarget = null;
+  app.onclick = async (e) => {
+    const b = e.target.closest('[data-act]');
+    if (!b) return;
+    const act = b.dataset.act, gi = +b.dataset.g, si = +b.dataset.s;
+    if (act === 'edit') { editing = true; return draw(); }
+    if (act === 'cancel') { groups = await loadLinks(); editing = false; return draw(); }
+    collect();
+    const swap = (list, i, j) => { if (j >= 0 && j < list.length) [list[i], list[j]] = [list[j], list[i]]; };
+    if (act === 'g-add') groups.push({ name: '新分組', sites: [] });
+    if (act === 'g-del' && confirm(`刪除分組「${groups[gi].name}」和裡面的 ${groups[gi].sites.length} 個網站？`)) groups.splice(gi, 1);
+    if (act === 'g-up') swap(groups, gi, gi - 1);
+    if (act === 'g-down') swap(groups, gi, gi + 1);
+    if (act === 's-add') groups[gi].sites.push({ name: '', desc: '', web: '', ig: '', fb: '', yt: '', logo: '' });
+    if (act === 's-del' && confirm(`刪除「${groups[gi].sites[si].name || '這個網站'}」？`)) groups[gi].sites.splice(si, 1);
+    if (act === 's-up') swap(groups[gi].sites, si, si - 1);
+    if (act === 's-down') swap(groups[gi].sites, si, si + 1);
+    if (act === 'logo-clear') groups[gi].sites[si].logo = '';
+    if (act === 'logo-up') { logoTarget = [gi, si]; return app.querySelector('#logo-file').click(); }
+    if (act === 'save') {
+      const bad = groups.flatMap((g) => g.sites.flatMap((x) => [...LINK_KINDS.map(([k]) => x[k]), /^media:/.test(x.logo) ? '' : x.logo].filter((u) => u && !okUrl(u)).map(() => x.name || '（未命名）')));
+      if (groups.some((g) => !g.name)) return toast('請填寫每個分組的名稱');
+      if (groups.some((g) => g.sites.some((x) => !x.name))) return toast('請填寫每個網站的名稱');
+      if (bad.length) return toast(`「${bad[0]}」的網址要以 https:// 開頭`);
+      b.disabled = true;
+      try {
+        await fb.setDoc(fb.doc(db, COL.meta, 'links'), { groups, updatedAt: Date.now() });
+        toast('已儲存相關網站'); editing = false;
+      } catch (err) { b.disabled = false; return toast('儲存失敗：' + (err.code || err.message) + '（請確認已部署最新的 Firestore 規則）'); }
+    }
+    draw();
+  };
+  app.onchange = async (e) => {
+    if (e.target.id !== 'logo-file' || !logoTarget) return;
+    const file = e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    collect();
+    try { toast('上傳中…'); groups[logoTarget[0]].sites[logoTarget[1]].logo = 'media:' + await uploadMedia(file); toast('已上傳，記得按「儲存」'); }
+    catch (err) { toast('上傳失敗：' + (err.code || err.message)); }
+    draw();
+  };
+  draw();
+};
 
 pages.faq = (app) => infoPage(app, '常見問題', faqList(SITE_PAGES.faq));
 pages.privacy = (app) => infoPage(app, '隱私權政策', sections(SITE_PAGES.privacy));
