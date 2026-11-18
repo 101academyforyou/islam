@@ -1364,7 +1364,7 @@ function notifyText(e) {
     '', `課程頁面：${courseLink(c.id)}`, ''
   ] : [];
   const lines = [
-    '您好：', '',
+    'Assalamualaikum 您好：', '',
     `${CONFIG.siteName || '循序漸進學伊斯蘭'}誠摯邀請您參加「${e.title}」。`, '',
     `■ 時間：${when}`,
     placeText(e) ? `■ 地點：${placeText(e)}` : null,
