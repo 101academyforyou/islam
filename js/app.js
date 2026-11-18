@@ -672,7 +672,7 @@ function metroHtml(path, joinBtn, width) {
       const mine = owns(c.id), p = mine ? progress(c) : 0, state = mine && p === 100 ? 'done' : mine ? 'going' : '';
       const last = gi === groups.length - 1 && i === g.list.length - 1;
       const sid = code + String(i + 1).padStart(2, '0');
-      return `<div class="mt-st ${state}${c === here ? ' here' : ''}${i === 0 && gi > 0 ? ' transfer' : ''}" style="grid-row:${r + 1};grid-column:${col}">` +
+      return `<div class="mt-st ${state}${c === here ? ' here' : ''}" style="grid-row:${r + 1};grid-column:${col}">` +
         `<a class="mt-dot" href="#/course/${c.id}" aria-label="${sid} ${esc(c.title)}">${state === 'done' ? '✓' : ''}</a>` +
         `<a class="mt-label" href="#/course/${c.id}">` +
         (last && c !== here ? '<span class="mt-end">🏁 終點</span>' : '') +
