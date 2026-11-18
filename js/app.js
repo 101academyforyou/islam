@@ -1174,6 +1174,45 @@ function downloadIcs(e) {
   downloadFile(`event-${e.start}.ics`, ics, 'text/calendar');
 }
 
+/* 月曆上下滑動切換月份：滑鼠滾輪、觸控板、手機手指上下滑（往上滑＝下個月，往下滑＝上個月）
+ * 直接按頁面上的「‹ ›」按鈕，所以行事曆和我的課表共用；週曆（時間軸）不受影響 */
+function bindMonthSwipe(app) {
+  let acc = 0, last = 0, touch = null;
+  const step = (dir) => {
+    const now = performance.now();
+    if (now - last < 650) return; // 一次滑動只換一個月
+    last = now; acc = 0;
+    const btn = app.querySelector(`.cal-head [data-nav="${dir}"]`);
+    if (!btn) return;
+    btn.click();
+    const grid = app.querySelector('.cal-grid');
+    if (grid) { grid.classList.remove('slide-next', 'slide-prev'); void grid.offsetWidth; grid.classList.add(dir > 0 ? 'slide-next' : 'slide-prev'); }
+  };
+  app.addEventListener('wheel', (e) => {
+    if (!e.target.closest('.cal-grid') || e.ctrlKey || Math.abs(e.deltaY) < Math.abs(e.deltaX)) return;
+    e.preventDefault();
+    if (performance.now() - last < 650) return;
+    acc += e.deltaMode === 1 ? e.deltaY * 30 : e.deltaY;
+    if (Math.abs(acc) >= 60) step(acc > 0 ? 1 : -1);
+  }, { passive: false });
+  app.addEventListener('touchstart', (e) => {
+    if (e.touches.length !== 1 || !e.target.closest('.cal-grid') || e.target.closest('.drag-ev')) { touch = null; return; }
+    touch = { x: e.touches[0].clientX, y: e.touches[0].clientY, v: null };
+  }, { passive: true });
+  app.addEventListener('touchmove', (e) => {
+    if (!touch) return;
+    const dx = e.touches[0].clientX - touch.x, dy = e.touches[0].clientY - touch.y;
+    if (touch.v === null && Math.hypot(dx, dy) > 8) touch.v = Math.abs(dy) > Math.abs(dx);
+    if (touch.v) e.preventDefault(); // 上下滑：換月份，不捲動頁面
+  }, { passive: false });
+  app.addEventListener('touchend', (e) => {
+    if (!touch) return;
+    const dy = e.changedTouches[0].clientY - touch.y, v = touch.v;
+    touch = null;
+    if (v && Math.abs(dy) > 50) step(dy < 0 ? 1 : -1);
+  });
+}
+
 pages.calendar = async (app, ym) => {
   app.innerHTML = '<div class="container"><p class="muted">載入行事曆中…</p></div>';
   let list = await loadEvents();
@@ -1246,6 +1285,7 @@ pages.calendar = async (app, ym) => {
       '</div>';
   }
   const ops = bindCalOps(app, () => draw());
+  bindMonthSwipe(app);
   app.onclick = async (e) => {
     if (await ops.click(e)) return;
     const nav = e.target.closest('[data-nav]');
@@ -3158,6 +3198,7 @@ pages.plan = async (app, ym) => {
       '</div>';
   }
   const ops = bindCalOps(app, () => draw());
+  bindMonthSwipe(app); // 月曆上下滑動換月份（週曆不受影響）
 
   app.onclick = async (e) => {
     if (await ops.click(e)) return;
