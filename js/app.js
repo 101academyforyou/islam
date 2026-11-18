@@ -652,65 +652,82 @@ function statusOf(c) {
   return p === 100 ? '<span class="owned">✓ 已完成</span>' : `<span class="owned">✓ 已加入 · 進度 ${p}%</span>`;
 }
 
-/* 學習地圖的「地圖」呈現：從起點出發，沿著一條蜿蜒的路一站一站往下走
- * 每一站是一門課；分類資料夾是路上的路牌；登入後會標出「你在這裡」（第一門還沒完成的課） */
-const JR_X = [20, 50, 80, 50]; // 每一站在路上的左右位置（%），依序循環
-function journeyHtml(path, joinBtn) {
-  const list = groupCourses(path).filter((g) => g.list.length);
-  const flat = list.flatMap((g) => g.list);
+/* 學習地圖的「捷運路線圖」呈現：每個分類資料夾是一條路線（各有顏色和代號），每門課是一個車站
+ * 路線在畫面上來回蛇行；登入後完成的站打勾、標出「你在這裡」（第一門還沒完成的課） */
+const METRO_LINES = [['A', '#e3002c'], ['B', '#0070bd'], ['C', '#008659'], ['D', '#f8a01c'], ['E', '#8e44ad'], ['F', '#00a2b1'], ['G', '#c48c31'], ['H', '#d6338a']];
+const metroCols = (w) => (w >= 1050 ? 5 : w >= 800 ? 4 : w >= 560 ? 3 : 1);
+function metroHtml(path, joinBtn, width) {
+  const groups = groupCourses(path).filter((g) => g.list.length);
+  const flat = groups.flatMap((g) => g.list);
   const here = flat.find((c) => !(owns(c.id) && progress(c) === 100)) || null;
-  let k = 0;
-  const stop = (c) => {
-    const x = JR_X[k++ % JR_X.length], right = x <= 50;
-    const n = stepOf(c), mine = owns(c.id), p = mine ? progress(c) : 0;
-    const state = mine && p === 100 ? 'done' : mine ? 'going' : '';
-    const isHere = c === here;
-    return `<div class="jr-stop ${right ? 'card-right' : 'card-left'}${isHere ? ' here' : ''}" style="--x:${x}%">` +
-      `<a class="jr-dot ${state}" href="#/course/${c.id}" style="--p:${p}" aria-label="第 ${n} 站：${esc(c.title)}"><span>${state === 'done' ? '✓' : n}</span></a>` +
-      `<a class="card jr-card" href="#/course/${c.id}">` +
-      (isHere ? `<span class="jr-here">📍 ${user ? '你在這裡' : '從這裡開始'}</span>` : '') +
-      `<div class="jr-thumb">${thumb(c)}</div><div class="jr-body">` +
-      `<span class="tag">${[n ? `第 ${n} 站` : '', c.level, c.published === false ? '未上架' : ''].filter(Boolean).map(esc).join(' · ')}</span>` +
-      `<h3>${esc(c.title)}</h3>` +
-      `<p class="muted small">${lessonsOf(c).length} 個單元${minutesText(c)}${joinCount[c.id] > 0 ? ' · ' + countText(c) : ''}</p>` +
-      `<div class="step-foot">${statusOf(c) || '<span class="price free">免費</span>'}${joinBtn(c)}</div></div></a></div>`;
-  };
   const doneN = flat.filter((c) => owns(c.id) && progress(c) === 100).length;
-  return '<div class="jr"><svg class="jr-road" aria-hidden="true"></svg>' +
-    `<div class="jr-mark jr-start"><span class="jr-flag">🚩</span><strong>起點</strong><span class="muted small">${user ? `已完成 ${doneN} / ${flat.length} 站` : '從第 1 站開始，一步一步往下走'}</span></div>` +
-    list.map((g) => (g.name ? `<div class="jr-mark jr-sec"><span>📁 ${esc(g.name)}</span><span class="muted small">${g.list.length} 門課</span></div>` : '') + g.list.map(stop).join('')).join('') +
-    `<div class="jr-mark jr-end"><span class="jr-flag">🏁</span><strong>終點</strong><span class="muted small">${doneN && doneN === flat.length ? '恭喜你走完全部課程！' : '走完全部課程'}</span></div></div>`;
+  const cols = metroCols(width);
+  const line = (g, gi) => {
+    const [code, color] = METRO_LINES[gi % METRO_LINES.length];
+    const rows = Math.ceil(g.list.length / cols);
+    const st = g.list.map((c, i) => {
+      const r = Math.floor(i / cols), k = i % cols, col = cols === 1 ? 1 : r % 2 ? cols - k : k + 1;
+      const mine = owns(c.id), p = mine ? progress(c) : 0, state = mine && p === 100 ? 'done' : mine ? 'going' : '';
+      const first = gi === 0 && i === 0, last = gi === groups.length - 1 && i === g.list.length - 1;
+      const sid = code + String(i + 1).padStart(2, '0');
+      return `<div class="mt-st ${state}${c === here ? ' here' : ''}${i === 0 && gi > 0 ? ' transfer' : ''}" style="grid-row:${r + 1};grid-column:${col}">` +
+        `<a class="mt-dot" href="#/course/${c.id}" aria-label="${sid} ${esc(c.title)}">${state === 'done' ? '✓' : ''}</a>` +
+        `<a class="mt-label" href="#/course/${c.id}">` +
+        (c === here ? `<span class="mt-here">📍 ${user ? '你在這裡' : '從這裡開始'}</span>` : first ? '<span class="mt-end">🚩 起點</span>' : '') +
+        (last && c !== here ? '<span class="mt-end">🏁 終點</span>' : '') +
+        `<span class="mt-code">${sid}</span><strong class="mt-name">${esc(c.title)}</strong>` +
+        `<span class="mt-meta">${lessonsOf(c).length} 個單元${mine ? ` · ${p === 100 ? '已完成' : `進度 ${p}%`}` : joinCount[c.id] > 0 ? ' · ' + countText(c) : ''}${c.published === false ? ' · 未上架' : ''}</span></a>` +
+        (mine ? '' : `<span class="mt-join">${joinBtn(c)}</span>`) + '</div>';
+    }).join('');
+    return `<section class="mt-line${cols === 1 ? ' vertical' : ''}" style="--line:${color};--cols:${cols}">` +
+      `<div class="mt-head"><span class="mt-badge">${code}</span><strong>${esc(g.name || '學習路線')}</strong><span class="muted small">${g.list.length} 站</span>` +
+      (gi > 0 ? `<span class="mt-xfer small">⇄ 由上一條路線轉乘</span>` : '') + '</div>' +
+      `<div class="mt-map" style="grid-template-rows:repeat(${rows},auto)"><svg class="mt-track" aria-hidden="true"></svg>${st}</div></section>`;
+  };
+  return `<div class="metro" data-cols="${cols}"><div class="mt-summary">` +
+    groups.map((g, gi) => { const [code, color] = METRO_LINES[gi % METRO_LINES.length]; return `<span class="mt-chip" style="--line:${color}"><span class="mt-badge">${code}</span>${esc(g.name || '學習路線')}</span>`; }).join('') +
+    `<span class="muted small mt-progress">${user ? `已完成 ${doneN} / ${flat.length} 站` : `共 ${flat.length} 站，從 ${METRO_LINES[0][0]}01 出發`}</span></div>` +
+    groups.map(line).join('') + '</div>';
 }
-// 依每一站的位置畫出蜿蜒的路；已經走過的路段（到「你在這裡」為止）用主色
-function drawJourneyRoad(jr) {
-  if (!jr) return;
-  const svg = jr.querySelector('.jr-road');
-  const paint = () => {
-    if (!jr.isConnected) return ro && ro.disconnect();
-    const box = jr.getBoundingClientRect();
-    const pts = [...jr.querySelectorAll('.jr-dot, .jr-mark')].map((el) => {
-      const r = (el.classList.contains('jr-mark') ? el.querySelector('.jr-flag, span') || el : el).getBoundingClientRect();
-      return { x: r.left + r.width / 2 - box.left, y: r.top + r.height / 2 - box.top, el };
-    });
-    if (pts.length < 2) return;
-    // 手機（一欄）：路直直走在每一站的圓圈下面，路牌、起點、終點也對齊
-    const dot = pts.find((p) => !p.el.classList.contains('jr-mark'));
-    if (dot && box.width <= 800) pts.forEach((p) => { if (p.el.classList.contains('jr-mark')) p.x = dot.x; });
-    const d = (list) => list.map((p, i) => {
-      if (!i) return `M${p.x.toFixed(1)},${p.y.toFixed(1)}`;
-      const a = list[i - 1], my = (p.y - a.y) / 2;
-      return `C${a.x.toFixed(1)},${(a.y + my).toFixed(1)} ${p.x.toFixed(1)},${(p.y - my).toFixed(1)} ${p.x.toFixed(1)},${p.y.toFixed(1)}`;
-    }).join(' ');
-    const hereIdx = pts.findIndex((p) => p.el.closest('.jr-stop.here'));
-    const walked = pts.slice(0, hereIdx > -1 ? hereIdx + 1 : pts.length);
+// 畫出每條路線：同一排是直線，換排時在側邊轉一個 U 形彎；已經走過的路段（到「你在這裡」為止）實心，之後的淡一點
+function paintMetro(metro) {
+  const maps = [...metro.querySelectorAll('.mt-map')];
+  const hereLine = maps.findIndex((m) => m.querySelector('.mt-st.here'));
+  maps.forEach((map, li) => {
+    const svg = map.querySelector('.mt-track');
+    const box = map.getBoundingClientRect();
+    const pts = [...map.querySelectorAll('.mt-dot')].map((el) => { const r = el.getBoundingClientRect(); return { x: r.left + r.width / 2 - box.left, y: r.top + r.height / 2 - box.top, el }; });
     svg.setAttribute('viewBox', `0 0 ${box.width} ${box.height}`);
     svg.setAttribute('width', box.width);
     svg.setAttribute('height', box.height);
-    svg.innerHTML = `<path class="road-base" d="${d(pts)}"/><path class="road-walked" d="${user && walked.length > 1 ? d(walked) : ''}"/><path class="road-line" d="${d(pts)}"/>`;
-  };
-  const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => requestAnimationFrame(paint)) : null;
-  if (ro) ro.observe(jr);
-  requestAnimationFrame(paint);
+    if (!pts.length) { svg.innerHTML = ''; return; }
+    const d = (list) => list.map((p, i) => {
+      if (!i) return `M${p.x.toFixed(1)},${p.y.toFixed(1)}`;
+      const a = list[i - 1];
+      if (Math.abs(a.y - p.y) < 2 || Math.abs(a.x - p.x) > 2) return `L${p.x.toFixed(1)},${p.y.toFixed(1)}`;
+      // 換排：往外側彎（右邊的站往右彎，左邊的往左彎）
+      const r = (p.y - a.y) / 2, outward = p.x > box.width / 2 ? 1 : 0;
+      return `A${r.toFixed(1)},${r.toFixed(1)} 0 0 ${outward} ${p.x.toFixed(1)},${p.y.toFixed(1)}`;
+    }).join(' ');
+    const vertical = map.closest('.mt-line').classList.contains('vertical');
+    const all = vertical ? `M${pts[0].x},${pts[0].y} L${pts[pts.length - 1].x},${pts[pts.length - 1].y}` : d(pts);
+    const hereIdx = pts.findIndex((p) => p.el.closest('.mt-st.here'));
+    // 走過的：「你在這裡」之前的路線整條，所在的路線到那一站為止
+    const walked = !user ? [] : hereIdx > -1 ? pts.slice(0, hereIdx + 1) : hereLine === -1 || li < hereLine ? pts : [];
+    const wd = walked.length > 1 ? (vertical ? `M${walked[0].x},${walked[0].y} L${walked[walked.length - 1].x},${walked[walked.length - 1].y}` : d(walked)) : '';
+    svg.innerHTML = `<path class="mt-rail" d="${all}"/><path class="mt-rail walked" d="${wd}"/>`;
+  });
+}
+function bindMetro(wrap, rerender) {
+  const metro = wrap.querySelector('.metro');
+  if (!metro) return;
+  const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => {
+    if (!wrap.isConnected) return ro.disconnect();
+    // 寬度改變到換欄數時重新排列，否則只重畫路線
+    if (metroCols(wrap.clientWidth) !== +metro.dataset.cols) { ro.disconnect(); rerender(); } else requestAnimationFrame(() => paintMetro(metro));
+  }) : null;
+  if (ro) ro.observe(wrap);
+  requestAnimationFrame(() => paintMetro(metro));
 }
 
 // 首頁：學習地圖（公開）＋搜尋與分類
@@ -743,7 +760,7 @@ pages.home = (app) => {
     '<input class="input search" id="q" type="search" placeholder="搜尋課程或文章…" aria-label="搜尋課程或文章" autocomplete="off" />' +
     '</div></section>' +
     '<section class="container"><div class="row-between map-head"><h2>學習地圖</h2>' +
-    '<span class="view-switch" role="group" aria-label="顯示方式"><button type="button" data-hview="map">🗺 地圖</button><button type="button" data-hview="grid">▦ 方格</button></span></div>' +
+    '<span class="view-switch" role="group" aria-label="顯示方式"><button type="button" data-hview="map">🚇 路線圖</button><button type="button" data-hview="grid">▦ 方格</button></span></div>' +
     (cats.length ? '<div class="chips" id="chips"><button class="chip" data-cat="">全部</button>' +
       cats.map((c) => `<button class="chip" data-cat="${esc(c)}">${esc(c)}</button>`).join('') + '</div>' : '') +
     '<div class="path map-grid" id="list"></div>' +
@@ -768,9 +785,9 @@ pages.home = (app) => {
     const words = q.split(/\s+/).filter(Boolean);
     // 地圖：沒有搜尋、篩選時才用地圖呈現
     if (hview === 'map' && path.length && !words.length && !cat) {
-      listEl.className = 'journey-wrap';
-      listEl.innerHTML = journeyHtml(path, joinBtn);
-      drawJourneyRoad(listEl.querySelector('.jr'));
+      listEl.className = 'metro-wrap';
+      listEl.innerHTML = metroHtml(path, joinBtn, listEl.clientWidth || app.clientWidth || innerWidth);
+      bindMetro(listEl, draw);
       const box = app.querySelector('#search-articles');
       box.hidden = true; box.innerHTML = '';
       return;
