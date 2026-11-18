@@ -772,3 +772,6 @@ body.no-select { user-select: none; }
 .pt-table th, .pt-table td { padding: 6px 8px; text-align: center; border-bottom: 1px solid var(--grid); white-space: nowrap; }
 .pt-table th { position: sticky; top: 0; background: var(--card); }
 .pt-table tr.today td { background: color-mix(in srgb, #f5b301 22%, var(--card)); font-weight: 700; }
+/* 路線圖：同一排的「加入學習區」對齊在同一個高度 */
+.mt-st { align-self: stretch; }
+.mt-join { margin-top: auto; }
