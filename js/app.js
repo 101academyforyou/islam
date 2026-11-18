@@ -1380,7 +1380,7 @@ function notifyText(e) {
   ].filter((l) => l !== null && l !== undefined);
   return { subject: `【${e.type || '活動'}通知】${e.title}（${dateLabel(nextOccurrence(e)?.start || e.start)}）`, body: lines.join('\n').replace(/\n{3,}/g, '\n\n') };
 }
-async function openNotify(box, e) {
+async function openNotify(box, getEvent) {
   box.innerHTML = '<p class="muted small">讀取學生名單中…</p>';
   let students = [];
   try {
@@ -1388,52 +1388,50 @@ async function openNotify(box, e) {
     students = snap.docs.map((d) => ({ email: d.id, ...d.data() })).filter((s) => /@/.test(s.email) && Object.keys(s.courses || {}).length);
   } catch (err) {
     box.innerHTML = `<p class="muted small">無法讀取學生名單：${esc(err.code || err.message)}</p>`;
-    return;
+    return null;
   }
-  const c = e.courseId ? findCourse(e.courseId) : null;
-  const groups = { all: students.map((s) => s.email) };
-  if (c) groups.course = students.filter((s) => (s.courses || {})[c.id]).map((s) => s.email);
-  let who = c && groups.course.length ? 'course' : 'all';
-  const t = notifyText(e);
+  const courseOf = () => { const e = getEvent(); return e.courseId ? findCourse(e.courseId) : null; };
+  const groups = () => {
+    const c = courseOf(), g = { all: students.map((s) => s.email) };
+    if (c) g.course = students.filter((s) => (s.courses || {})[c.id]).map((s) => s.email);
+    return g;
+  };
+  let who = (() => { const g = groups(); return g.course && g.course.length ? 'course' : 'all'; })();
+  let sent = 0; // 人數多時分成好幾封：已經打開到第幾封
   const from = CONFIG.notifyFrom || CONFIG.email || '';
+  const batchesOf = () => { const list = groups()[who] || groups().all, out = []; for (let i = 0; i < list.length; i += NOTIFY_BATCH) out.push(list.slice(i, i + NOTIFY_BATCH)); return out; };
   function draw() {
-    const list = groups[who];
-    const batches = [];
-    for (let i = 0; i < list.length; i += NOTIFY_BATCH) batches.push(list.slice(i, i + NOTIFY_BATCH));
+    const g = groups(), c = courseOf(), e = getEvent();
+    if (!g[who]) who = 'all';
+    const n = batchesOf().length;
     box.innerHTML = (e.published ? '' : '<p class="notice small">⚠ 這個活動還是草稿，學生點連結會看不到，建議先勾選「發布」。</p>') +
       '<div class="notify-who">' +
-      `<label class="check"><input type="radio" name="who" value="all" ${who === 'all' ? 'checked' : ''}/> 所有學生（${groups.all.length} 人）</label>` +
-      (c ? `<label class="check"><input type="radio" name="who" value="course" ${who === 'course' ? 'checked' : ''}/> 加入「${esc(c.title)}」的學生（${groups.course.length} 人）</label>` : '') + '</div>' +
-      `<label>標題<input class="input" id="n-subject" value="${esc(t.subject)}"/></label>` +
-      `<label>內容 <span class="muted small">已自動帶入活動說明${c ? '和完整的課程介紹' : ''}，可以修改後再寄</span><textarea class="input textarea" id="n-body" rows="16">${esc(t.body)}</textarea></label>` +
-      (list.length
-        ? '<div class="notify-send"><p class="notify-step"><strong>寄出</strong>：按下面的按鈕會打開 Gmail，收件人、標題、內容都已經填好，<strong>在 Gmail 視窗按「傳送」</strong>就寄出了。</p>' +
-          '<div class="lesson-nav">' + batches.map((b, i) => `<button type="button" class="btn btn-send" data-batch="${i}">✉ 寄出通知${batches.length > 1 ? `（第 ${i + 1} 封，${b.length} 人）` : `給 ${b.length} 人`}</button>`).join('') + '</div>' +
-          `<p class="muted small">收件人放在<strong>密件副本</strong>，學生之間看不到彼此的 Email。${batches.length > 1 ? `人數較多，分成 ${batches.length} 封，每封 ${NOTIFY_BATCH} 人，請每一封都要在 Gmail 按傳送。` : ''}Gmail 每天約可寄 500 人。</p>` +
-          '<p class="muted small" id="n-long" hidden>⚠ 內容很長，Gmail 可能放不下全部內容；如果 Gmail 裡的內容不完整，請按「複製內容」再貼到 Gmail。</p>' +
-          '<div class="lesson-nav"><button type="button" class="btn btn-ghost btn-sm" id="n-copy-to">複製收件人</button><button type="button" class="btn btn-ghost btn-sm" id="n-copy-body">複製內容</button></div></div>'
-        : '<p class="muted">目前沒有可以寄送的學生。</p>');
-    const longHint = () => { const el = box.querySelector('#n-long'); if (el) el.hidden = encodeURIComponent(box.querySelector('#n-body').value).length < 7000; };
-    box.querySelector('#n-body').addEventListener('input', longHint);
-    longHint();
-    box.querySelectorAll('[name=who]').forEach((r) => { r.onchange = () => { who = r.value; draw(); }; });
-    box.querySelectorAll('[data-batch]').forEach((b) => {
-      b.onclick = () => {
-        const bcc = batches[+b.dataset.batch].join(',');
-        const subject = box.querySelector('#n-subject').value, body = box.querySelector('#n-body').value;
-        const url = 'https://mail.google.com/mail/?view=cm&fs=1' + (from ? '&authuser=' + encodeURIComponent(from) : '') +
-          `&bcc=${encodeURIComponent(bcc)}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-        window.open(url, '_blank', 'noopener');
-        b.textContent = '✓ 已開啟 Gmail，請在 Gmail 按「傳送」' + (batches.length > 1 ? `（第 ${+b.dataset.batch + 1} 封）` : '');
-        b.classList.add('sent');
-      };
-    });
-    const copy = async (text, msg) => { try { await navigator.clipboard.writeText(text); toast(msg); } catch (err) { toast('無法複製，請手動選取'); } };
-    const ct = box.querySelector('#n-copy-to'), cb = box.querySelector('#n-copy-body');
-    if (ct) ct.onclick = () => copy(list.join(', '), `已複製 ${list.length} 個 Email`);
-    if (cb) cb.onclick = () => copy(box.querySelector('#n-subject').value + '\n\n' + box.querySelector('#n-body').value, '已複製標題和內容');
+      `<label class="check"><input type="radio" name="who" value="all" ${who === 'all' ? 'checked' : ''}/> 所有學生（${g.all.length} 人）</label>` +
+      (c ? `<label class="check"><input type="radio" name="who" value="course" ${who === 'course' ? 'checked' : ''}/> 加入「${esc(c.title)}」的學生（${g.course.length} 人）</label>` : '') + '</div>' +
+      (n > 1 ? `<p class="muted small">人數較多，會分成 ${n} 封（每封 ${NOTIFY_BATCH} 人）：每按一次上方按鈕打開下一封，每一封都要在 Gmail 按「傳送」。</p>` : '') +
+      (g.all.length ? '' : '<p class="muted">目前沒有可以寄送的學生。</p>');
+    box.querySelectorAll('[name=who]').forEach((r) => { r.onchange = () => { who = r.value; sent = 0; draw(); }; });
   }
   draw();
+  return {
+    refresh: draw, // 活動改了「發布」或「相關課程」時重新顯示收件人
+    send(btn, win) {
+      const batches = batchesOf();
+      if (!batches.length) { if (win) win.close(); return toast('目前沒有可以寄送的學生'); }
+      if (sent >= batches.length) sent = 0;
+      const t = notifyText(getEvent());
+      const k = sent++;
+      // 內容太長時 Gmail 網址放不下：內容先複製起來，請管理者在 Gmail 貼上
+      const long = encodeURIComponent(t.body).length > 7000;
+      if (long) navigator.clipboard?.writeText(t.body).catch(() => {});
+      const url = 'https://mail.google.com/mail/?view=cm&fs=1' + (from ? '&authuser=' + encodeURIComponent(from) : '') +
+        `&bcc=${encodeURIComponent(batches[k].join(','))}&su=${encodeURIComponent(t.subject)}&body=${encodeURIComponent(long ? '（內容較長，已複製好，請在這裡按 Ctrl+V 或 ⌘+V 貼上）' : t.body)}`;
+      if (win && !win.closed) win.location.href = url; else window.open(url, '_blank', 'noopener');
+      if (long) toast('內容較長，已複製到剪貼簿：請在 Gmail 的內容貼上');
+      btn.textContent = sent < batches.length ? `✉ 寄出第 ${sent + 1} 封（${batches[sent].length} 人）` : '✓ 已開啟 Gmail，請在 Gmail 按「傳送」';
+      if (sent >= batches.length) setTimeout(() => { if (btn.isConnected) btn.textContent = '✉ 寄出通知（開啟 Gmail）'; sent = 0; }, 8000);
+    }
+  };
 }
 
 // 行事曆管理（管理者）
@@ -1494,8 +1492,8 @@ pages.eventEdit = async (app, id, query = {}) => {
       '<button class="btn" id="save">完成，查看活動 →</button>' +
       '<button type="button" class="btn btn-ghost" id="del">刪除活動</button></div></form>' +
       '<div class="card pad notify-card"><div class="row-between"><h3>📧 寄送活動通知</h3>' +
-      '<button type="button" class="btn btn-sm" id="notify-open">準備通知信 ↓</button></div>' +
-      `<p class="muted small">先在下面選收件人、檢查內容，再按「✉ 寄出通知」。會打開你的 Gmail（${esc(CONFIG.notifyFrom || CONFIG.email || '')}），收件人放在密件副本、標題和內容都幫你寫好，檢查後由你自己按「傳送」。</p>` +
+      '<button type="button" class="btn btn-sm" id="notify-open">✉ 寄出通知（開啟 Gmail）</button></div>' +
+      `<p class="muted small">先在下面選收件人，再按「✉ 寄出通知」。會打開你的 Gmail（${esc(CONFIG.notifyFrom || CONFIG.email || '')}），收件人放在密件副本，標題和內容（活動資訊、課程介紹）都幫你寫好；要修改就在 Gmail 裡改，最後由你自己按「傳送」。</p>` +
       '<div id="notify"></div></div></div>';
   }
   function collect() {
@@ -1578,6 +1576,7 @@ pages.eventEdit = async (app, id, query = {}) => {
     });
     f.addEventListener('change', (ev) => {
       if (ev.target.name === 'xdate') return;
+      if (['published', 'courseId'].includes(ev.target.name)) setTimeout(() => { collect(); if (notify) notify.refresh(); });
       if (ev.target.name === 'allDay') app.querySelector('#times').hidden = ev.target.checked;
       if (['repeat', 'start', 'repeatUntil'].includes(ev.target.name)) {
         collect();
@@ -1589,11 +1588,18 @@ pages.eventEdit = async (app, id, query = {}) => {
       autosave(300);
     });
     bindMediaButtons(app);
-    app.querySelector('#notify-open').onclick = async () => {
+    // 收件人選項一進頁面就顯示；按上方按鈕：先存好活動，再用最新的內容打開 Gmail
+    let notify = null;
+    const notifyReady = openNotify(app.querySelector('#notify'), () => ({ ...e })).then((n) => { notify = n; });
+    app.querySelector('#notify-open').onclick = async (ev) => {
+      const btn = ev.currentTarget;
+      // 先在按下的當下開好新分頁（Safari 等瀏覽器不允許等待後才開視窗），存好後再填入 Gmail 網址
+      const win = window.open('', '_blank');
+      if (win) win.opener = null;
       const ok = await saveNow();
-      if (!ok) return toast('請先把活動資料填寫完整');
-      await openNotify(app.querySelector('#notify'), { ...e });
-      app.querySelector('#notify').scrollIntoView({ behavior: 'smooth', block: 'start' });
+      if (!ok) { if (win) win.close(); return toast('請先把活動資料填寫完整'); }
+      await notifyReady;
+      if (notify) notify.send(btn, win); else if (win) win.close();
     };
     app.querySelector('#del').onclick = async () => {
       if (!confirm(`確定刪除「${e.title || '這個活動'}」？此動作無法復原。`)) return;
