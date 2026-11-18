@@ -946,6 +946,12 @@ pages.article = async (app, id) => {
  * islam_events/{活動id} = { title, type, start: 'YYYY-MM-DD', end, allDay, startTime: 'HH:MM', endTime, location, url, courseId, description, published, createdAt, updatedAt }
  * 已發布的活動任何人都看得到；草稿只有管理者看得到 */
 const EVENT_TYPES = ['課程', '講座', '活動', '節日', '其他'];
+// 免責說明：顯示在行事曆、活動頁和活動通知信
+const EVENT_DISCLAIMER = '本網站刊登的活動資訊僅供參考，時間、地點等如有異動以主辦單位公告為準；詳細活動資訊請洽主辦單位。';
+const disclaimerHtml = () => `<p class="disclaimer small">ⓘ ${EVENT_DISCLAIMER}</p>`;
+// 主辦單位聯絡方式：網址、Email 變成連結
+const contactHtml = (t) => { t = String(t || '').trim(); return /^https?:\/\/\S+$/i.test(t) ? `<a class="link" href="${esc(t)}" target="_blank" rel="noopener">${esc(t)}</a>` : /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(t) ? `<a class="link" href="mailto:${esc(t)}">${esc(t)}</a>` : esc(t); };
+const organizerText = (e) => (e.organizer ? e.organizer + (e.organizerContact ? `（聯絡：${e.organizerContact}）` : '') : e.organizerContact ? `聯絡：${e.organizerContact}` : '');
 const typeClass = (t) => 'ev-' + Math.max(0, EVENT_TYPES.indexOf(t));
 let eventCache = null, eventFor = null;
 async function loadEvents(force = false) {
@@ -1050,7 +1056,7 @@ function googleCalUrl(e) {
   const dates = e.allDay || !e.startTime
     ? `${compact(e.start)}/${compact(plusDay(endOf(e)))}`
     : `${compact(e.start)}T${e.startTime.replace(':', '')}00/${compact(endOf(e))}T${(e.endTime || e.startTime).replace(':', '')}00`;
-  const details = [plainText(e.description).slice(0, 1200), e.url, location.origin + location.pathname + '#/event/' + e.id].filter(Boolean).join('\n\n');
+  const details = [plainText(e.description).slice(0, 1200), e.url, organizerText(e) ? '主辦單位：' + organizerText(e) : '', location.origin + location.pathname + '#/event/' + e.id, '※ ' + EVENT_DISCLAIMER].filter(Boolean).join('\n\n');
   return 'https://calendar.google.com/calendar/render?action=TEMPLATE&ctz=Asia%2FTaipei' +
     `&text=${encodeURIComponent(e.title)}&dates=${dates}&details=${encodeURIComponent(details)}&location=${encodeURIComponent(placeText(e) || e.url || '')}` +
     (rrule(e) ? `&recur=${encodeURIComponent(rrule(e))}` : '');
@@ -1113,7 +1119,7 @@ function gcalEventOf(e) {
     id: gcalId('e' + e.id),
     summary: e.title,
     location: placeText(e) || e.url || '',
-    description: [plainText(e.description).slice(0, 4000), e.url, location.origin + location.pathname + '#/event/' + e.id].filter(Boolean).join('\n\n'),
+    description: [plainText(e.description).slice(0, 4000), e.url, organizerText(e) ? '主辦單位：' + organizerText(e) : '', location.origin + location.pathname + '#/event/' + e.id, '※ ' + EVENT_DISCLAIMER].filter(Boolean).join('\n\n'),
     start: timed ? gcalWhen(e.start, e.startTime) : { date: e.start },
     end: timed ? gcalWhen(endOf(e), e.endTime || e.startTime) : { date: plusDay(endOf(e)) },
     ...(rrule(e) ? { recurrence: [rrule(e)] } : {})
@@ -1163,7 +1169,7 @@ function downloadIcs(e) {
   const ics = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//islam.onepointzeroone.org//calendar//ZH', 'BEGIN:VEVENT',
     `UID:${e.id}@islam.onepointzeroone.org`, `DTSTAMP:${new Date().toISOString().replace(/[-:]/g, '').slice(0, 15)}Z`, ...when, rrule(e),
     `SUMMARY:${escIcs(e.title)}`, placeText(e) ? `LOCATION:${escIcs(placeText(e))}` : '',
-    `DESCRIPTION:${escIcs([plainText(e.description), e.url].filter(Boolean).join('\n\n'))}`,
+    `DESCRIPTION:${escIcs([plainText(e.description), e.url, organizerText(e) ? '主辦單位：' + organizerText(e) : '', '※ ' + EVENT_DISCLAIMER].filter(Boolean).join('\n\n'))}`,
     `URL:${location.origin + location.pathname}#/event/${e.id}`, 'END:VEVENT', 'END:VCALENDAR'].filter(Boolean).join('\r\n');
   downloadFile(`event-${e.start}.ics`, ics, 'text/calendar');
 }
@@ -1232,6 +1238,7 @@ pages.calendar = async (app, ym) => {
         types.map((t) => `<label class="type-check ${typeClass(t)}"><input type="checkbox" data-show="${esc(t)}" ${hidden.has(t) ? '' : 'checked'}/><i class="dot-sw ${typeClass(t)}"></i>${esc(t)}</label>`).join('') +
         '</div>' : '') +
       '<div class="cal-grid">' + WEEK.map((w) => `<div class="cal-w">${w}</div>`).join('') + cells.join('') + '</div>' +
+      disclaimerHtml() +
       (dayEvents
         ? `<h3>${esc(dateLabel(picked))}</h3>` + (dayEvents.length ? '<div class="event-list">' + dayEvents.map(rowOf).join('') + '</div>' : '<p class="muted">這一天沒有活動。</p>')
         : `<h3>${m} 月的活動</h3>` + (monthEvents.length ? '<div class="event-list">' + monthEvents.map(rowOf).join('') + '</div>'
@@ -1285,10 +1292,11 @@ pages.event = async (app, id) => {
       : `<p><strong>時間</strong><span>${esc(whenText(e))}${e.allDay || !e.startTime ? '（全天）' : ''}</span></p>`) +
     (placeText(e) ? `<p><strong>地點</strong><span dir="auto">${esc(placeText(e))}</span></p>` : '') +
     (e.url ? `<p><strong>連結</strong><span><a class="link" href="${esc(e.url)}" target="_blank" rel="noopener">${esc(e.url)}</a></span></p>` : '') +
+    (e.organizer || e.organizerContact ? `<p><strong>主辦單位</strong><span dir="auto">${esc(e.organizer || '')}${e.organizerContact ? `${e.organizer ? '<br>' : ''}<span class="muted small">聯絡：</span>${contactHtml(e.organizerContact)}` : ''}</span></p>` : '') +
     (c ? `<p><strong>課程</strong><span><a class="link" href="#/course/${c.id}">${esc(c.title)} →</a></span></p>` : '') +
     '<div class="lesson-nav"><button type="button" class="btn btn-sm" id="gcal">＋ 加入 Google 日曆</button>' +
     '<button type="button" class="btn btn-ghost btn-sm" id="ics">⬇ 下載行事曆檔（Apple／Outlook）</button></div></div>' +
-    (e.description ? `<div class="article">${renderArticle(e.description)}</div>` : '') + '</div>';
+    (e.description ? `<div class="article">${renderArticle(e.description)}</div>` : '') + disclaimerHtml() + '</div>';
   app.querySelector('#ics').onclick = () => downloadIcs(e);
   app.querySelector('#gcal').onclick = (ev) => addToGoogleCalendar([gcalEventOf(e)], googleCalUrl(e), ev.currentTarget);
 };
@@ -1306,7 +1314,7 @@ function notifyText(e) {
   const courseInfo = c ? [
     `━━━━ 課程介紹：${c.title} ━━━━`,
     c.subtitle || null,
-    [c.instructor ? '講師 ' + c.instructor : '', c.level, lessonsOf(c).length + ' 個單元'].filter(Boolean).join(' · '),
+    [c.instructor ? '講師 ' + c.instructor : '', c.organizer ? '主辦單位 ' + c.organizer : '', c.level, lessonsOf(c).length + ' 個單元'].filter(Boolean).join(' · '),
     '', plainText(c.description) || null, c.description ? '' : null,
     (c.outcomes || []).length ? '你將學到：' : null,
     ...(c.outcomes || []).map((o) => '・' + o),
@@ -1321,10 +1329,12 @@ function notifyText(e) {
     `■ 時間：${when}`,
     placeText(e) ? `■ 地點：${placeText(e)}` : null,
     e.url ? `■ 連結：${e.url}` : null,
+    organizerText(e) ? `■ 主辦單位：${organizerText(e)}` : null,
     c ? `■ 相關課程：${c.title}` : null,
     '', desc || null, desc ? '' : null,
     ...courseInfo,
     `活動詳情與加入行事曆：${pageUrl}`, '',
+    `※ ${EVENT_DISCLAIMER}`, '',
     `${CONFIG.siteName || '循序漸進學伊斯蘭'} 敬上`,
     '（如不想再收到活動通知，請直接回信告訴我們。）'
   ].filter((l) => l !== null && l !== undefined);
@@ -1411,7 +1421,7 @@ pages.eventEdit = async (app, id, query = {}) => {
   const src = isNew ? null : eventCache.find((x) => x.id === id);
   if (!isNew && !src) return notFound(app);
   if (!document.body.contains(app)) return;
-  const blank = { title: '', type: query.course ? '課程' : '活動', start: query.date || todayStr(), end: '', allDay: false, startTime: '', endTime: '', city: '', location: '', url: '', courseId: query.course || '', description: '', repeat: '', repeatUntil: '', published: false };
+  const blank = { title: '', type: query.course ? '課程' : '活動', start: query.date || todayStr(), end: '', allDay: false, startTime: '', endTime: '', city: '', location: '', url: '', organizer: '', organizerContact: '', courseId: query.course || '', description: '', repeat: '', repeatUntil: '', published: false };
   const e = isNew ? { ...blank, id: newId('e'), createdAt: Date.now() } : { ...blank, ...src };
   const field = (label, name, val, attrs = '') => `<label>${label}<input class="input" name="${name}" value="${esc(val)}" ${attrs}/></label>`;
   function draw() {
@@ -1430,6 +1440,8 @@ pages.eventEdit = async (app, id, query = {}) => {
       '<div class="two">' + `<label>縣市 <span class="muted small">用來篩選地點</span><select class="input" name="city"><option value="">（未指定）</option>${CITIES.map((c) => `<option ${c === e.city ? 'selected' : ''}>${c}</option>`).join('')}</select></label>` +
       field('地點 <span class="muted small">可留空，例如：台北清真寺</span>', 'location', e.location, 'maxlength="200"') + '</div>' +
       field('連結 <span class="muted small">可留空，例如報名表、直播網址</span>', 'url', e.url, 'placeholder="https://…"') +
+      '<div class="two">' + field('主辦單位 <span class="muted small">可留空，例如：台北清真寺</span>', 'organizer', e.organizer || '', 'maxlength="100"') +
+      field('主辦單位聯絡方式 <span class="muted small">可留空：電話、Email 或網址</span>', 'organizerContact', e.organizerContact || '', 'maxlength="200"') + '</div>' +
       `<label class="check"><input type="checkbox" name="published" ${e.published ? 'checked' : ''}/> 發布（取消勾選則是草稿，只有管理者看得到）</label></div>` +
       '<div class="card pad"><h3>活動說明 <span class="muted small">可留空</span></h3>' + mediaButton('description') +
       `<textarea class="input textarea" name="description" rows="8" placeholder="活動內容、注意事項…">${esc(e.description)}</textarea>` +
@@ -1449,7 +1461,7 @@ pages.eventEdit = async (app, id, query = {}) => {
   function collect() {
     const f = app.querySelector('#ee');
     if (!f) return;
-    ['title', 'type', 'courseId', 'start', 'end', 'startTime', 'endTime', 'city', 'location', 'url', 'repeat', 'repeatUntil'].forEach((k) => { e[k] = f[k].value.trim(); });
+    ['title', 'type', 'courseId', 'start', 'end', 'startTime', 'endTime', 'city', 'location', 'url', 'organizer', 'organizerContact', 'repeat', 'repeatUntil'].forEach((k) => { e[k] = f[k].value.trim(); });
     e.allDay = f.allDay.checked;
     e.published = f.published.checked;
     e.description = f.description.value.replace(/\s+$/, '');
@@ -1468,7 +1480,7 @@ pages.eventEdit = async (app, id, query = {}) => {
       : e.url && !/^https?:\/\/\S+$/i.test(e.url) ? '連結要以 https:// 開頭' : '';
     if (problem) { setStatus('⚠ ' + problem, true); return Promise.resolve(false); }
     const data = { title: e.title, type: e.type, start: e.start, end: e.end && e.end !== e.start ? e.end : '', allDay: e.allDay, startTime: e.allDay ? '' : e.startTime, endTime: e.allDay ? '' : e.endTime,
-      city: e.city, location: e.location, url: e.url, courseId: e.courseId, repeat: e.repeat || '', repeatUntil: e.repeat ? e.repeatUntil : '', description: e.description, published: e.published, createdAt: e.createdAt || Date.now(), updatedAt: Date.now() };
+      city: e.city, location: e.location, url: e.url, organizer: e.organizer, organizerContact: e.organizerContact, courseId: e.courseId, repeat: e.repeat || '', repeatUntil: e.repeat ? e.repeatUntil : '', description: e.description, published: e.published, createdAt: e.createdAt || Date.now(), updatedAt: Date.now() };
     setStatus('儲存中…');
     chain = chain.then(async () => {
       await fb.setDoc(fb.doc(db, COL.events, e.id), data);
@@ -1740,7 +1752,7 @@ pages.course = (app, id) => {
     (isAdmin() ? ` · <a href="#/admin/${c.id}" class="link small">✎ 編輯此課程</a>` + (c.published === false ? ' <span class="tag">（未上架）</span>' : '') : '') +
     (n ? `<p class="step-label">${sectionName(c) ? esc(sectionName(c)) + ' · ' : ''}第 ${n} 階段</p>` : '') +
     `<h1>${esc(c.title)}</h1><p class="lead muted">${esc(c.subtitle)}</p>` +
-    `<p class="muted small">${[c.instructor ? '講師 ' + esc(c.instructor) : '', esc(c.level), lessonsOf(c).length + ' 個單元'].filter(Boolean).join(' · ')}${minutesText(c)}</p>` + hint +
+    `<p class="muted small">${[c.instructor ? '講師 ' + esc(c.instructor) : '', c.organizer ? '主辦單位 ' + esc(c.organizer) : '', esc(c.level), lessonsOf(c).length + ' 個單元'].filter(Boolean).join(' · ')}${minutesText(c)}</p>` + hint +
     (c.trailer ? '<h2>課程預告</h2>' + youtubeEmbed(c.trailer) : '') +
     `<h2>課程介紹</h2><div class="article course-intro">${renderArticle(c.description)}</div>` +
     ((c.outcomes || []).length ? `<h2>你將學到</h2><ul class="checks">${c.outcomes.map((o) => `<li>${esc(o)}</li>`).join('')}</ul>` : '') +
@@ -2703,7 +2715,7 @@ async function editEvent(id, day) {
   return new Promise((resolve) => {
     const box = document.createElement('div');
     box.className = 'modal-backdrop';
-    const info = `<p class="muted small"><i class="dot-sw ${typeClass(ev.type)}"></i>${esc(ev.type || '活動')}${rep ? ' · 🔁 ' + esc(repeatText(ev)) : ''}${placeText(ev) ? ' · 📍 ' + esc(placeText(ev)) : ''}</p>`;
+    const info = `<p class="muted small"><i class="dot-sw ${typeClass(ev.type)}"></i>${esc(ev.type || '活動')}${rep ? ' · 🔁 ' + esc(repeatText(ev)) : ''}${placeText(ev) ? ' · 📍 ' + esc(placeText(ev)) : ''}${ev.organizer ? ' · 主辦：' + esc(ev.organizer) : ''}</p>`;
     box.innerHTML = '<form class="modal card pad" role="dialog" aria-modal="true" aria-labelledby="ev-title">' +
       '<button type="button" class="modal-x" data-act="x" aria-label="關閉">✕</button>' +
       (admin
@@ -2723,7 +2735,7 @@ async function editEvent(id, day) {
         : `<h3 id="ev-title">📅 ${esc(ev.title)}</h3>` + info +
           `<p><strong>${esc(dateLabel(day || ev.start))}</strong> ${ev.allDay || !ev.startTime ? '（全天）' : esc(ev.startTime + (ev.endTime ? '–' + ev.endTime : ''))}</p>` +
           '<div class="lesson-nav"><button type="button" class="btn btn-sm" data-act="view">▶ 查看活動</button>' +
-          '<button type="button" class="btn btn-ghost btn-sm" data-act="gcal">＋ 加入 Google 日曆</button><button type="button" class="btn btn-ghost btn-sm" data-act="ics">⬇ 下載日曆檔</button></div>') +
+          '<button type="button" class="btn btn-ghost btn-sm" data-act="gcal">＋ 加入 Google 日曆</button><button type="button" class="btn btn-ghost btn-sm" data-act="ics">⬇ 下載日曆檔</button></div>' + disclaimerHtml()) +
       '</form>';
     const f = box.querySelector('form');
     const xd = admin ? bindXdates(box, () => day || f.start.value) : null;
@@ -3221,7 +3233,7 @@ pages.admin = async (app, id, query, sub) => {
     '</div></div>';
   const groups = groupCourses(courses);
   app.innerHTML = '<div class="container wide">' + adminTabs('courses') + '<div class="row-between"><h1>課程管理</h1><span class="lesson-nav">' +
-    '<a class="btn btn-ghost btn-sm" href="#/admin/playlist">▶ 從播放清單建立</a><a class="btn btn-sm" href="#/admin/new">＋ 新增課程</a>' + (BLOG_ON ? '<a class="btn btn-sm" href="#/admin/article/new">＋ 新增文章</a>' : '') + '<a class="btn btn-sm" href="#/admin/event/new">＋ 新增活動</a></span></div>' +
+    '<a class="btn btn-ghost btn-sm" href="#/admin/playlist">▶ 從播放清單建立</a>' + (BLOG_ON ? '<a class="btn btn-sm" href="#/admin/article/new">＋ 新增文章</a>' : '') + '<a class="btn btn-sm" href="#/admin/event/new">＋ 新增活動</a></span></div>' +
     (coursesFromDb ? '' :
       '<div class="card pad notice-card"><strong>第一次使用：請先匯入課程</strong><p class="muted small">目前的課程資料來自網站內建檔案。按下面的按鈕把課程匯入資料庫後，就能在網站上直接編輯。</p>' +
       '<button class="btn btn-sm" id="import">匯入現有課程到資料庫</button></div>') +
@@ -3656,7 +3668,7 @@ pages.edit = async (app, id) => {
       field('課程名稱', 'title', c.title, 'required') +
       field('副標題', 'subtitle', c.subtitle) +
       '<div class="two">' + field('分類 <span class="muted small">學生可以在首頁依分類篩選，例如：信仰、功修、生活</span>', 'category', c.category || '') + field('程度', 'level', c.level) + '</div>' +
-      '<div class="two">' + field('講師', 'instructor', c.instructor) + '<span></span></div>' +
+      '<div class="two">' + field('講師', 'instructor', c.instructor) + field('主辦單位 <span class="muted small">可留空</span>', 'organizer', c.organizer || '', 'maxlength="100"') + '</div>' +
       (mapSections.length ? `<label>學習地圖的分類資料夾<select class="input" name="section"><option value="">其他課程（未分類）</option>${mapSections.map((x) => `<option value="${esc(x.id)}"${sectionOf(c) === x.id ? ' selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label>` : '') +
       '<p class="muted small">分類資料夾和順序也可以在「課程管理」直接拖曳方格調整。</p>' +
       `<label class="check"><input type="checkbox" name="published" ${c.published !== false ? 'checked' : ''}/> 上架（取消勾選則只有管理者看得到）</label>` +
@@ -3719,6 +3731,7 @@ pages.edit = async (app, id) => {
     if (f.section) c.section = f.section.value;
     c.level = f.level.value.trim();
     c.instructor = f.instructor.value.trim();
+    c.organizer = f.organizer.value.trim();
     c.price = 0; // 所有課程免費
     c.published = f.published.checked;
     c.unlisted = f.unlisted.checked;
@@ -4074,6 +4087,7 @@ async function render() {
   const seg = path.split('/').filter(Boolean); // 例如 ['learn', 'react', 'l3']
 
   renderHeader();
+  document.querySelectorAll('.modal-backdrop').forEach((m) => m.remove()); // 換頁時關掉還開著的小視窗
   const main = document.getElementById('app');
   const app = document.createElement('div'); // 每頁一個新容器
   main.replaceChildren(app);
