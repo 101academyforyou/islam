@@ -2059,11 +2059,13 @@ function editSchedule(c) {
       `<div class="two"><label>開始日期<input class="input" type="date" name="start" value="${esc(cur.start || todayStr())}"/></label>` +
       `<label>結束日期 <span class="muted small">可留空</span><input class="input" type="date" name="until" value="${esc(cur.until || '')}"/></label></div>` +
       '<p class="small" id="sc-sum"></p>' +
+      xdateTools('另外加幾天（不影響每週）') +
       '<div class="lesson-nav"><button class="btn btn-sm">儲存</button>' +
       (mySchedules[c.id] ? `<a class="btn btn-ghost btn-sm" href="#/learn/${esc(c.id)}" id="sc-go">▶ 去上課</a><button type="button" class="btn btn-ghost btn-sm" id="sc-copy">📋 複製</button>` : '') +
       (mySchedules[c.id] ? '<button type="button" class="btn btn-ghost btn-sm" id="sc-gcal">＋ 加入 Google 日曆</button><button type="button" class="btn btn-ghost btn-sm" id="sc-ics">⬇ 下載日曆檔</button><button type="button" class="btn btn-ghost btn-sm" id="sc-del">從課表移除</button>' : '') +
       '<button type="button" class="btn btn-ghost btn-sm" id="sc-cancel">取消</button></div></form>';
     const f = box.querySelector('form');
+    const xd = bindXdates(box, () => f.start.value);
     const read = () => ({ days: [...f.querySelectorAll('[name=d]:checked')].map((x) => +x.value), time: f.time.value || '20:00', minutes: +f.minutes.value, start: f.start.value || todayStr(), until: f.until.value || '' });
     const sum = () => { const v = read(); box.querySelector('#sc-sum').textContent = v.days.length ? '→ ' + scheduleText(v) : '請至少選一天'; };
     const close = (v) => { box.remove(); document.removeEventListener('keydown', onKey); resolve(v); };
@@ -2080,7 +2082,16 @@ function editSchedule(c) {
       const v = read();
       if (!v.days.length) return toast('請至少選一天');
       if (v.until && v.until < v.start) return toast('結束日期不能早於開始日期');
-      if (await save(v)) { toast('已加入我的課表'); close(true); }
+      // 另外加的日期：放進 extras（同一個時間），已經是每週上課日的跳過
+      const add = xd.dates().filter((d) => !isSeriesDay(v, d)).map((d) => ({ date: d, time: v.time }));
+      if (await save(v)) {
+        if (add.length) {
+          const sc = mySchedules[c.id], have = new Set((sc.extras || []).map((x) => x.date + x.time));
+          mySchedules[c.id] = { ...sc, extras: [...(sc.extras || []), ...add.filter((x) => !have.has(x.date + x.time))].slice(-200) };
+          try { await saveSchedules(); } catch (err) { toast('額外日期儲存失敗：' + (err.code || err.message)); }
+        }
+        toast(add.length ? `已加入我的課表，另外加了 ${add.length} 天` : '已加入我的課表'); close(true);
+      }
     };
     box.onclick = async (e) => {
       if (e.target === box || e.target.id === 'sc-cancel') return close(false);
@@ -2681,6 +2692,90 @@ pages.learn = async (app, id, query, lessonId) => {
   };
 };
 
+/* 行事曆上的活動（課程、講座、活動…）：和單元課程一樣的小視窗
+ * 管理者：修改標題、類型、日期、時間，複製到其他天，📋 複製（貼到月曆）、加入 Google 日曆、刪除；其他人：看資訊、加入 Google 日曆
+ * 回傳 true 表示有修改 */
+async function editEvent(id, day) {
+  const ev = (eventCache || []).find((x) => x.id === id);
+  if (!ev) { go('/event/' + id); return false; }
+  const admin = isAdmin(), rep = ev.repeat && REPEATS[ev.repeat];
+  const len = dayDiff(ev.start, endOf(ev));
+  return new Promise((resolve) => {
+    const box = document.createElement('div');
+    box.className = 'modal-backdrop';
+    const info = `<p class="muted small"><i class="dot-sw ${typeClass(ev.type)}"></i>${esc(ev.type || '活動')}${rep ? ' · 🔁 ' + esc(repeatText(ev)) : ''}${placeText(ev) ? ' · 📍 ' + esc(placeText(ev)) : ''}</p>`;
+    box.innerHTML = '<form class="modal card pad" role="dialog" aria-modal="true" aria-labelledby="ev-title">' +
+      '<button type="button" class="modal-x" data-act="x" aria-label="關閉">✕</button>' +
+      (admin
+        ? `<h3 id="ev-title">📅 修改${esc(ev.type || '活動')}</h3>` + info +
+          `<label>標題<input class="input" name="title" value="${esc(ev.title)}" maxlength="200" required/></label>` +
+          `<label>類型<select class="input" name="type">${EVENT_TYPES.map((t) => `<option ${t === ev.type ? 'selected' : ''}>${t}</option>`).join('')}</select></label>` +
+          `<div class="two"><label>日期${rep ? ' <span class="muted small">（重複活動的第一天）</span>' : ''}<input class="input" type="date" name="start" value="${esc(ev.start)}" required/></label>` +
+          `<label class="check ev-allday"><input type="checkbox" name="allDay" ${ev.allDay ? 'checked' : ''}/> 全天</label></div>` +
+          `<div class="two ev-times" ${ev.allDay ? 'hidden' : ''}><label>開始時間<input class="input" type="time" name="startTime" value="${esc(ev.startTime || '')}"/></label>` +
+          `<label>結束時間<input class="input" type="time" name="endTime" value="${esc(ev.endTime || '')}"/></label></div>` +
+          (rep ? `<p class="muted small">這是重複活動，修改會套用到整個系列。你點的是 ${esc(dateLabel(day))} 這一次。</p>` : '') +
+          xdateTools() +
+          '<div class="lesson-nav"><button class="btn btn-sm">儲存</button>' +
+          '<button type="button" class="btn btn-ghost btn-sm" data-act="view">▶ 查看活動</button><button type="button" class="btn btn-ghost btn-sm" data-act="copy">📋 複製</button>' +
+          '<button type="button" class="btn btn-ghost btn-sm" data-act="gcal">＋ 加入 Google 日曆</button><button type="button" class="btn btn-ghost btn-sm" data-act="full">✎ 完整編輯</button>' +
+          '<button type="button" class="btn btn-ghost btn-sm" data-act="del">刪除活動</button></div>'
+        : `<h3 id="ev-title">📅 ${esc(ev.title)}</h3>` + info +
+          `<p><strong>${esc(dateLabel(day || ev.start))}</strong> ${ev.allDay || !ev.startTime ? '（全天）' : esc(ev.startTime + (ev.endTime ? '–' + ev.endTime : ''))}</p>` +
+          '<div class="lesson-nav"><button type="button" class="btn btn-sm" data-act="view">▶ 查看活動</button>' +
+          '<button type="button" class="btn btn-ghost btn-sm" data-act="gcal">＋ 加入 Google 日曆</button><button type="button" class="btn btn-ghost btn-sm" data-act="ics">⬇ 下載日曆檔</button></div>') +
+      '</form>';
+    const f = box.querySelector('form');
+    const xd = admin ? bindXdates(box, () => day || f.start.value) : null;
+    const close = (v) => { box.remove(); document.removeEventListener('keydown', onKey); resolve(v); };
+    const onKey = (e) => { if (e.key === 'Escape') close(false); };
+    if (admin) f.allDay.onchange = () => { box.querySelector('.ev-times').hidden = f.allDay.checked; };
+    box.onclick = async (e) => {
+      const act = e.target === box ? 'x' : (e.target.closest('[data-act]') || {}).dataset?.act;
+      if (act === 'x') return close(false);
+      if (act === 'view') { close(false); return go('/event/' + ev.id); }
+      if (act === 'full') { close(false); return go('/admin/event/' + ev.id); }
+      if (act === 'gcal') return addToGoogleCalendar([gcalEventOf(ev)], googleCalUrl(ev), e.target);
+      if (act === 'ics') return downloadIcs(ev);
+      if (act === 'copy') { setPlanClip({ kind: 'event', eid: ev.id, time: ev.startTime || '', label: ev.title }); return close(false); }
+      if (act === 'del') {
+        if (!confirm(`刪除「${ev.title}」？${rep ? '（這是重複活動，會刪除所有日期）' : ''}此動作無法復原。`)) return;
+        try { await fb.deleteDoc(fb.doc(db, COL.events, ev.id)); eventCache = eventCache.filter((x) => x.id !== ev.id); toast('已刪除活動'); close(true); }
+        catch (err) { toast('刪除失敗：' + (err.code || err.message)); }
+      }
+    };
+    f.onsubmit = async (e) => {
+      e.preventDefault();
+      if (!admin) return;
+      const v = { title: f.title.value.trim(), type: f.type.value, start: f.start.value, allDay: f.allDay.checked,
+        startTime: f.allDay.checked ? '' : f.startTime.value, endTime: f.allDay.checked ? '' : f.endTime.value };
+      if (!v.title) return toast('請輸入標題');
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(v.start)) return toast('請選擇日期');
+      if (v.startTime && v.endTime && v.endTime < v.startTime && !len) return toast('結束時間不能早於開始時間');
+      const shift = dayDiff(ev.start, v.start);
+      Object.assign(v, { end: ev.end ? addDays(ev.end, shift) : '', repeatUntil: ev.repeatUntil ? addDays(ev.repeatUntil, shift) : (ev.repeatUntil || ''), updatedAt: Date.now() });
+      // 複製到其他天：每個日期各建立一個單次活動
+      const dates = xd.dates().filter((d) => d !== v.start && d !== day);
+      try {
+        await fb.setDoc(fb.doc(db, COL.events, ev.id), v, { merge: true });
+        Object.assign(ev, v);
+        const base = { ...ev }; delete base.id;
+        for (const d of dates) {
+          const copy = { ...base, start: d, end: len ? addDays(d, len) : '', repeat: '', repeatUntil: '', createdAt: Date.now(), updatedAt: Date.now() };
+          const nid = newId('e');
+          await fb.setDoc(fb.doc(db, COL.events, nid), copy);
+          eventCache.push({ ...copy, id: nid });
+        }
+        eventCache.sort((x, y) => (x.start + (x.allDay ? '' : x.startTime || '')).localeCompare(y.start + (y.allDay ? '' : y.startTime || '')));
+        toast(dates.length ? `已更新，並複製到 ${dates.map(dateLabel).join('、')}` : '已更新活動');
+        close(true);
+      } catch (err) { toast('儲存失敗：' + (err.code || err.message)); }
+    };
+    document.addEventListener('keydown', onKey);
+    document.body.appendChild(box);
+  });
+}
+
 /* 我的課表和行事曆共用的日曆操作：點一下修改、✕ 刪除這一次、拖曳移動、複製貼上
  * 課程（自己的課表）每個人都能操作；活動（data-eid）只有管理者能拖曳、複製、刪除 */
 function bindCalOps(app, draw) {
@@ -2768,7 +2863,7 @@ function bindCalOps(app, draw) {
         '<button type="button" class="modal-x" data-act="x" aria-label="關閉">✕</button>' +
         `<h3>⏰ ${esc(c.title)}（額外一次）</h3><p class="muted small">這是複製貼上的額外一堂，不影響每週的系列課程。</p>` +
         `<div class="two"><label>日期<input class="input" type="date" name="date" value="${esc(x.date)}" required/></label>` +
-        `<label>時間<input class="input" type="time" name="time" value="${esc(x.time)}" required/></label></div>` +
+        `<label>時間<input class="input" type="time" name="time" value="${esc(x.time)}" required/></label></div>` + xdateTools() +
         `<div class="lesson-nav"><button class="btn btn-sm">儲存</button><a class="btn btn-ghost btn-sm" href="#/learn/${esc(cid)}" data-act="go">▶ 去上課</a>` +
         '<button type="button" class="btn btn-ghost btn-sm" data-act="copy">📋 複製</button><button type="button" class="btn btn-ghost btn-sm" data-act="del">刪除這一次</button></div></form>';
       const close = (v) => { box.remove(); resolve(v); };
@@ -2784,7 +2879,14 @@ function bindCalOps(app, draw) {
         if (act === 'copy') { setPlanClip({ kind: 'series', cid, time: x.time, label: `${c.title} ${x.time}` }); return close(true); }
         if (act === 'del') put(sc.extras.filter((_, j) => j !== i), '已刪除這一次');
       };
-      box.onsubmit = (e) => { e.preventDefault(); const f = e.target; put(sc.extras.map((y, j) => (j === i ? { date: f.date.value, time: f.time.value } : y)), '已更新'); };
+      const xd = bindXdates(box, () => box.querySelector('[name=date]').value);
+      box.onsubmit = (e) => {
+        e.preventDefault();
+        const f = e.target, v = { date: f.date.value, time: f.time.value };
+        const have = new Set(sc.extras.map((y, j) => (j === i ? v : y)).map((y) => y.date + y.time));
+        const add = xd.dates().map((d) => ({ date: d, time: v.time })).filter((y) => !isSeriesDay(sc, y.date) && !have.has(y.date + y.time) && have.add(y.date + y.time));
+        put([...sc.extras.map((y, j) => (j === i ? v : y)), ...add].slice(-200), add.length ? `已更新，另外加了 ${add.length} 天` : '已更新');
+      };
       document.body.appendChild(box);
     });
   }
@@ -2921,7 +3023,7 @@ function bindCalOps(app, draw) {
       const chip = e.target.closest('.drag-ev');
       if (chip) {
         e.preventDefault();
-        if (chip.dataset.eid) { go((isAdmin() ? '/admin/event/' : '/event/') + chip.dataset.eid); return true; }
+        if (chip.dataset.eid) { if (await editEvent(chip.dataset.eid, chip.dataset.day)) draw(); return true; }
         if (chip.dataset.sid != null) { const it = mySessions[+chip.dataset.sid], r = it && sessionRef(it); if (r && await editSession(r.c, r.l, +chip.dataset.sid)) draw(); return true; }
         if (chip.dataset.extra != null) { if (await editExtra(chip.dataset.cid, +chip.dataset.extra)) draw(); return true; }
         const c = findCourse(chip.dataset.cid); if (c && await editSchedule(c)) draw(); return true;
