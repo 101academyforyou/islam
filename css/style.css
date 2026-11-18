@@ -703,3 +703,9 @@ body.no-select { user-select: none; }
 .mt-line.vertical .mt-label { align-items: flex-start; flex: 1; }
 .mt-line.vertical .mt-join { margin-left: 50px; margin-top: -6px; }
 .mt-line.vertical .mt-here, .mt-line.vertical .mt-end { align-self: flex-start; }
+/* 套用建議分類的確認視窗 */
+.suggest-modal { width: min(640px, 100%); }
+.sg-line { margin: 10px 0; padding: 8px 12px; border-left: 5px solid var(--line); border-radius: 8px; background: var(--soft); }
+.sg-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.sg-head .mt-badge { min-width: 22px; height: 22px; font-size: 12px; }
+.sg-line ol { margin: 6px 0 2px; padding-left: 22px; font-size: .9rem; }
