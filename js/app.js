@@ -675,7 +675,7 @@ function metroHtml(path, joinBtn, width) {
       return `<div class="mt-st ${state}${c === here ? ' here' : ''}${i === 0 && gi > 0 ? ' transfer' : ''}" style="grid-row:${r + 1};grid-column:${col}">` +
         `<a class="mt-dot" href="#/course/${c.id}" aria-label="${sid} ${esc(c.title)}">${state === 'done' ? '✓' : ''}</a>` +
         `<a class="mt-label" href="#/course/${c.id}">` +
-        (c === here ? `<span class="mt-here">📍 ${user ? '你在這裡' : '從這裡開始'}</span>` : first ? '<span class="mt-end">🚩 起點</span>' : '') +
+        (first ? '<span class="mt-end">🚩 起點</span>' : '') +
         (last && c !== here ? '<span class="mt-end">🏁 終點</span>' : '') +
         `<span class="mt-code">${sid}</span><strong class="mt-name">${esc(c.title)}</strong>` +
         `<span class="mt-meta">${lessonsOf(c).length} 個單元${mine ? ` · ${p === 100 ? '已完成' : `進度 ${p}%`}` : joinCount[c.id] > 0 ? ' · ' + countText(c) : ''}${c.published === false ? ' · 未上架' : ''}</span></a>` +
