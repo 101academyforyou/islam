@@ -3233,7 +3233,7 @@ pages.admin = async (app, id, query, sub) => {
     '</div></div>';
   const groups = groupCourses(courses);
   app.innerHTML = '<div class="container wide">' + adminTabs('courses') + '<div class="row-between"><h1>課程管理</h1><span class="lesson-nav">' +
-    '<a class="btn btn-ghost btn-sm" href="#/admin/playlist">▶ 從播放清單建立</a><a class="btn btn-sm" href="#/admin/new">＋ 新增課程</a>' + (BLOG_ON ? '<a class="btn btn-sm" href="#/admin/article/new">＋ 新增文章</a>' : '') + '<a class="btn btn-sm" href="#/admin/event/new">＋ 新增活動</a></span></div>' +
+    '<a class="btn btn-ghost btn-sm" href="#/admin/playlist">▶ 從播放清單建立</a>' + (BLOG_ON ? '<a class="btn btn-sm" href="#/admin/article/new">＋ 新增文章</a>' : '') + '<a class="btn btn-sm" href="#/admin/event/new">＋ 新增活動</a></span></div>' +
     (coursesFromDb ? '' :
       '<div class="card pad notice-card"><strong>第一次使用：請先匯入課程</strong><p class="muted small">目前的課程資料來自網站內建檔案。按下面的按鈕把課程匯入資料庫後，就能在網站上直接編輯。</p>' +
       '<button class="btn btn-sm" id="import">匯入現有課程到資料庫</button></div>') +
