@@ -732,6 +732,146 @@ function bindMetro(wrap, rerender) {
   requestAnimationFrame(() => paintMetro(metro));
 }
 
+/* ---------------- 首頁：禮拜時間 ----------------
+ * 在瀏覽器裡用天文公式計算（參考 PrayTimes.org；MWL 算法：晨禮 18°、宵禮 17°、晡禮沙斐儀派），不需要外部服務
+ * 天氣用 Open-Meteo（免費、不用金鑰）；城市記在這台電腦，也可以用「我的位置」 */
+const PT_CITIES = [['台北', 25.033, 121.565], ['新北', 25.012, 121.465], ['基隆', 25.128, 121.742], ['桃園', 24.993, 121.301], ['新竹', 24.804, 120.971],
+  ['苗栗', 24.560, 120.821], ['台中', 24.147, 120.674], ['彰化', 24.081, 120.538], ['南投', 23.910, 120.684], ['雲林', 23.709, 120.431], ['嘉義', 23.480, 120.449],
+  ['台南', 22.999, 120.227], ['高雄', 22.627, 120.301], ['屏東', 22.669, 120.486], ['宜蘭', 24.757, 121.753], ['花蓮', 23.987, 121.601], ['台東', 22.756, 121.144],
+  ['澎湖', 23.571, 119.579], ['金門', 24.432, 118.317], ['馬祖', 26.160, 119.950], ['香港', 22.319, 114.169]];
+const PT_NAMES = [['fajr', '晨禮'], ['sunrise', '日出'], ['dhuhr', '晌禮'], ['asr', '晡禮'], ['maghrib', '昏禮'], ['isha', '宵禮']];
+const ptMath = (() => {
+  const dtr = (d) => d * Math.PI / 180, rtd = (r) => r * 180 / Math.PI;
+  const sin = (d) => Math.sin(dtr(d)), cos = (d) => Math.cos(dtr(d)), tan = (d) => Math.tan(dtr(d));
+  const asin = (x) => rtd(Math.asin(x)), acos = (x) => rtd(Math.acos(Math.max(-1, Math.min(1, x)))), atan2 = (y, x) => rtd(Math.atan2(y, x)), acot = (x) => rtd(Math.atan(1 / x));
+  const fix = (a, b) => { a -= b * Math.floor(a / b); return a < 0 ? a + b : a; };
+  const sunPos = (jd) => {
+    const D = jd - 2451545.0, g = fix(357.529 + 0.98560028 * D, 360), q = fix(280.459 + 0.98564736 * D, 360);
+    const L = fix(q + 1.915 * sin(g) + 0.020 * sin(2 * g), 360), e = 23.439 - 0.00000036 * D;
+    return { decl: asin(sin(e) * sin(L)), eqt: q / 15 - fix(atan2(cos(e) * sin(L), cos(L)) / 15, 24) };
+  };
+  const julian = (y, m, d) => { if (m <= 2) { y -= 1; m += 12; } const A = Math.floor(y / 100); return Math.floor(365.25 * (y + 4716)) + Math.floor(30.6001 * (m + 1)) + d + 2 - A + Math.floor(A / 4) - 1524.5; };
+  // 回傳當地時間（小時，例如 11.63）
+  function times(y, m, d, lat, lng, tz) {
+    const jd0 = julian(y, m, d) - lng / 360;
+    const mid = (t) => fix(12 - sunPos(jd0 + t).eqt, 24);
+    const ang = (a, t, ccw) => { const { decl } = sunPos(jd0 + t); const v = acos((-sin(a) - sin(decl) * sin(lat)) / (cos(decl) * cos(lat))) / 15; return mid(t) + (ccw ? -v : v); };
+    const asr = (t) => { const { decl } = sunPos(jd0 + t); return ang(-acot(1 + tan(Math.abs(lat - decl))), t); };
+    let t = { fajr: 5, sunrise: 6, dhuhr: 12, asr: 13, maghrib: 18, isha: 18 };
+    for (let i = 0; i < 2; i++) {
+      const p = Object.fromEntries(Object.entries(t).map(([k, v]) => [k, v / 24]));
+      t = { fajr: ang(18, p.fajr, true), sunrise: ang(0.833, p.sunrise, true), dhuhr: mid(p.dhuhr), asr: asr(p.asr), maghrib: ang(0.833, p.maghrib), isha: ang(17, p.isha) };
+    }
+    return Object.fromEntries(Object.entries(t).map(([k, v]) => [k, v + tz - lng / 15]));
+  }
+  // 太陽高度（度），畫弧線用
+  function altitude(y, m, d, lat, lng, tz, hour) {
+    const { decl, eqt } = sunPos(julian(y, m, d) - lng / 360 + hour / 24);
+    const H = 15 * (hour - (12 - eqt + tz - lng / 15));
+    return asin(sin(lat) * sin(decl) + cos(lat) * cos(decl) * cos(H));
+  }
+  return { times, altitude };
+})();
+const ptHm = (h) => { const m = Math.round(h * 60); return pad2(Math.floor(m / 60) % 24) + ':' + pad2(m % 60); };
+const WEATHER_ICON = (c) => (c === 0 ? '☀️' : c <= 2 ? '🌤' : c === 3 ? '☁️' : c <= 48 ? '🌫' : c <= 67 || (c >= 80 && c <= 82) ? '🌧' : c <= 77 || c === 85 || c === 86 ? '🌨' : '⛈');
+function prayerWidget(box) {
+  let place = null;
+  try { place = JSON.parse(localStorage.getItem('isl_pt_place')); } catch (e) {}
+  if (!place || typeof place.lat !== 'number') place = { name: '台北', lat: 25.033, lng: 121.565 };
+  const tz = 8; // 台灣、香港都是 UTC+8；「我的位置」用這台裝置的時區
+  let weather = null, timer = 0;
+  const tzOf = () => (place.mine ? -new Date().getTimezoneOffset() / 60 : tz);
+  const dayTimes = (date) => ptMath.times(date.getFullYear(), date.getMonth() + 1, date.getDate(), place.lat, place.lng, tzOf());
+  const loadWeather = () => {
+    weather = null;
+    fetch(`https://api.open-meteo.com/v1/forecast?latitude=${place.lat}&longitude=${place.lng}&current=temperature_2m,relative_humidity_2m,weather_code&timezone=auto`)
+      .then((r) => (r.ok ? r.json() : null)).then((d) => { if (d && d.current) { weather = d.current; draw(); } }).catch(() => {});
+  };
+  function arcSvg(t, nowH) {
+    const W = 420, Hh = 150, base = 90, from = Math.floor(t.fajr) - 1, to = Math.ceil(t.isha) + 1;
+    const now = new Date(), Y = now.getFullYear(), M = now.getMonth() + 1, D = now.getDate();
+    const alt = (h) => ptMath.altitude(Y, M, D, place.lat, place.lng, tzOf(), h);
+    const peak = Math.max(10, alt(t.dhuhr));
+    const X = (h) => ((h - from) / (to - from)) * W, Yp = (h) => base - (alt(h) / peak) * (base - 18);
+    const pts = []; for (let h = from; h <= to + 0.001; h += 0.25) pts.push([X(h), Yp(h)]);
+    const path = (list) => list.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' ');
+    const past = pts.filter((p) => p[0] <= X(nowH)), cur = nowH >= from && nowH <= to;
+    const dots = PT_NAMES.filter(([k]) => k !== 'sunrise').map(([k]) => `<circle cx="${X(t[k]).toFixed(1)}" cy="${Yp(t[k]).toFixed(1)}" r="5.5" class="${t[k] <= nowH ? 'pt-done' : 'pt-todo'}"/>`).join('');
+    return `<svg class="pt-arc" viewBox="0 0 ${W} ${Hh}" preserveAspectRatio="none" aria-hidden="true">` +
+      `<line x1="0" y1="${base}" x2="${W}" y2="${base}" class="pt-horizon"/>` +
+      `<path d="${path(pts)}" class="pt-curve"/>` + (past.length > 1 ? `<path d="${path(past)}" class="pt-curve walked"/>` : '') + dots +
+      (cur ? `<g class="pt-sun" transform="translate(${X(nowH).toFixed(1)},${Yp(nowH).toFixed(1)})"><circle r="9"/>${alt(nowH) > 0 ? '<circle r="14" class="ray"/>' : ''}</g>` : '') + '</svg>';
+  }
+  // 現在的狀態：下一拜、還剩幾秒
+  function state() {
+    const now = new Date(), nowH = now.getHours() + now.getMinutes() / 60 + now.getSeconds() / 3600;
+    const t = dayTimes(now);
+    const order = PT_NAMES.filter(([k]) => k !== 'sunrise');
+    let next = order.find(([k]) => t[k] > nowH), nextAt;
+    if (next) nextAt = t[next[0]]; else { const tm = new Date(now); tm.setDate(tm.getDate() + 1); next = order[0]; nextAt = dayTimes(tm).fajr + 24; }
+    return { now, nowH, t, next, left: Math.max(0, Math.round((nextAt - nowH) * 3600)) };
+  }
+  const countText = (left) => `${pad2(Math.floor(left / 3600))}:${pad2(Math.floor(left / 60) % 60)}:${pad2(left % 60)}`;
+  let shown = '';
+  // 每秒只更新倒數；換了下一拜或過了一分鐘才整個重畫（不會關掉正在選的城市選單）
+  function tick() {
+    if (!box.isConnected) return clearInterval(timer);
+    const st = state(), key = st.next[0] + st.now.getMinutes();
+    const el = box.querySelector('.pt-count');
+    if (el) el.textContent = countText(st.left);
+    if (key !== shown && document.activeElement !== box.querySelector('select')) draw();
+  }
+  function draw() {
+    if (!box.isConnected) return clearInterval(timer);
+    const { nowH, t, next, left, now } = state();
+    shown = next[0] + now.getMinutes();
+    const curKey = [...PT_NAMES].reverse().find(([k]) => t[k] <= nowH)?.[0] || 'isha';
+    box.innerHTML = '<div class="card pt-card">' +
+      '<div class="pt-top"><span class="muted small">下一拜</span><span class="pt-pills">' +
+      (weather ? `<span class="pt-pill" title="目前天氣">${WEATHER_ICON(weather.weather_code)} <strong>${Math.round(weather.temperature_2m)}°</strong> 💧${Math.round(weather.relative_humidity_2m)}%</span>` : '') +
+      `<label class="pt-pill pt-place" title="選擇城市">📍 <select aria-label="選擇城市">${PT_CITIES.map(([n]) => `<option ${!place.mine && n === place.name ? 'selected' : ''}>${n}</option>`).join('')}<option value="__me" ${place.mine ? 'selected' : ''}>${place.mine ? '我的位置' : '📍 使用我的位置'}</option></select></label></span></div>` +
+      `<div class="pt-head"><h2>${next[1]}</h2><span class="pt-count" aria-label="距離${next[1]}還有">${countText(left)}</span></div>` +
+      arcSvg(t, nowH) +
+      `<div class="pt-row">${PT_NAMES.map(([k, n]) => `<div class="pt-cell${k === curKey ? ' cur' : ''}"><span>${n}</span><strong>${ptHm(t[k])}</strong></div>`).join('')}</div>` +
+      '<button type="button" class="pt-month">📅 本月禮拜時間表<span aria-hidden="true">›</span></button>' +
+      '<p class="muted pt-note">依天文公式計算（MWL），實際時間請以當地清真寺公告為準。</p></div>';
+    box.querySelector('select').onchange = (e) => {
+      const v = e.target.value;
+      if (v === '__me') {
+        if (!navigator.geolocation) { toast('這個瀏覽器不支援定位'); return draw(); }
+        navigator.geolocation.getCurrentPosition((pos) => {
+          place = { name: '我的位置', lat: +pos.coords.latitude.toFixed(3), lng: +pos.coords.longitude.toFixed(3), mine: true }; save();
+        }, () => { toast('無法取得位置，請允許定位或改選城市'); draw(); }, { timeout: 10000 });
+        return;
+      }
+      const c = PT_CITIES.find(([n]) => n === v);
+      place = { name: c[0], lat: c[1], lng: c[2] }; save();
+    };
+    box.querySelector('.pt-month').onclick = monthTable;
+  }
+  const save = () => { try { localStorage.setItem('isl_pt_place', JSON.stringify(place)); } catch (e) {} loadWeather(); draw(); };
+  function monthTable() {
+    const now = new Date(), y = now.getFullYear(), m = now.getMonth(), days = new Date(y, m + 1, 0).getDate();
+    const rows = [];
+    for (let d = 1; d <= days; d++) {
+      const t = dayTimes(new Date(y, m, d));
+      rows.push(`<tr${d === now.getDate() ? ' class="today"' : ''}><td>${m + 1}/${d}（${WEEK[new Date(y, m, d).getDay()]}）</td>${PT_NAMES.map(([k]) => `<td>${ptHm(t[k])}</td>`).join('')}</tr>`);
+    }
+    const bx = document.createElement('div');
+    bx.className = 'modal-backdrop';
+    bx.innerHTML = '<div class="modal card pad pt-modal" role="dialog" aria-modal="true"><button type="button" class="modal-x" aria-label="關閉">✕</button>' +
+      `<h3>📅 ${y} 年 ${m + 1} 月禮拜時間表（${esc(place.name)}）</h3>` +
+      `<div class="pt-table-wrap"><table class="pt-table"><thead><tr><th>日期</th>${PT_NAMES.map(([, n]) => `<th>${n}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table></div>` +
+      '<p class="muted small">依天文公式計算（MWL：晨禮 18°、宵禮 17°、晡禮沙斐儀派），實際時間請以當地清真寺公告為準。</p></div>';
+    bx.onclick = (e) => { if (e.target === bx || e.target.closest('.modal-x')) bx.remove(); };
+    document.body.appendChild(bx);
+    const today = bx.querySelector('tr.today'); if (today) today.scrollIntoView({ block: 'center' });
+  }
+  loadWeather();
+  draw();
+  timer = setInterval(tick, 1000);
+}
+
 // 首頁：學習地圖（公開）＋搜尋與分類
 const categoriesOf = (list) => [...new Set(list.map((c) => c.category).filter(Boolean))];
 pages.home = (app) => {
@@ -761,6 +901,7 @@ pages.home = (app) => {
     (learners > 0 ? `<span>${ICON.usersRound} 共 <strong>${learners.toLocaleString()}</strong> 人加入學習</span>` : '') + '</p>' +
     `<input class="input search" id="q" type="search" placeholder="${BLOG_ON ? '搜尋課程或文章…' : '搜尋課程…'}" aria-label="${BLOG_ON ? '搜尋課程或文章' : '搜尋課程'}" autocomplete="off" />` +
     '</div></section>' +
+    '<section class="container pt-wrap" id="prayer"></section>' +
     '<section class="container"><div class="row-between map-head"><h2>學習地圖</h2>' +
     '<span class="view-switch" role="group" aria-label="顯示方式"><button type="button" data-hview="map">🚇 路線圖</button><button type="button" data-hview="grid">▦ 方格</button></span></div>' +
     (cats.length ? '<div class="chips" id="chips"><button class="chip" data-cat="">全部</button>' +
@@ -774,6 +915,7 @@ pages.home = (app) => {
     '<section class="container home-faq"><h2>常見問題</h2>' + faqList(SITE_PAGES.faq.slice(0, 5)) +
     '<p><a class="link" href="#/faq">查看全部常見問題 →</a></p></section>';
 
+  prayerWidget(app.querySelector('#prayer'));
   const listEl = app.querySelector('#list');
   let posts = []; // 已發布的文章（搜尋時一起找）
   let foldClosed = [];
