@@ -8,6 +8,8 @@
  */
 // 這個網站的 Firestore 集合名稱
 const COL = { courses: 'islam_courses', videos: 'islam_courseVideos', enroll: 'islam_enroll', prefs: 'islam_prefs', students: 'islam_students', notes: 'islam_notes', posts: 'islam_posts', counts: 'islam_counts', counted: 'islam_counted', stats: 'islam_stats', articles: 'islam_articles', blog: 'islam_blog', media: 'islam_media', events: 'islam_events', plans: 'islam_plans', meta: 'islam_meta' };
+// 獨立文章功能：目前關閉（選單、首頁、管理頁都不顯示；資料庫裡的文章保留，改成 true 就恢復）
+const BLOG_ON = false;
 const FIREBASE = 'https://www.gstatic.com/firebasejs/10.12.2/'; // 改版本時 index.html 的 modulepreload 也要一起改
 const CONFIG = window.SITE_CONFIG || {};
 const configured = !!(CONFIG.firebaseConfig && CONFIG.firebaseConfig.apiKey);
@@ -625,7 +627,7 @@ function renderHeader() {
     // 標誌：往上的階梯（循序漸進）
     `<a href="#/" class="logo"><span class="logo-mark" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18"><path fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" d="M4 19h5v-5h5V9h5V5"/></svg></span>${esc(CONFIG.siteName || '循序漸進學伊斯蘭')}</a>` +
     '<nav>' +
-    '<a href="#/">學習地圖</a><a href="#/articles">文章</a>' + (user ? '<a href="#/my">我的學習區</a><a href="#/plan">我的課表</a>' : '') + '<a href="#/calendar">行事曆</a>' +
+    '<a href="#/">學習地圖</a>' + (BLOG_ON ? '<a href="#/articles">文章</a>' : '') + (user ? '<a href="#/my">我的學習區</a><a href="#/plan">我的課表</a>' : '') + '<a href="#/calendar">行事曆</a>' +
     (user
       ? `${isAdmin() ? '<a href="#/admin">管理</a>' : ''}<a class="muted small user-name" href="#/account" title="帳號設定（${esc(user.email)}）">${esc(name)}</a><button class="link" id="logout">登出</button>`
       : '<a href="#/login" class="btn btn-sm">登入</a>') +
@@ -755,9 +757,9 @@ pages.home = (app) => {
     `<h1>${esc(CONFIG.tagline || '一步一步，認識伊斯蘭')}</h1>` +
     `<p class="lead muted">${esc(CONFIG.intro || '從最基礎開始，依照學習地圖循序漸進。所有課程免費，登入後加入課程即可觀看。')}</p>` +
     `<p class="site-stats"><span>${ICON.bookOpen} 目前共有 <strong>${path.filter((c) => c.published !== false).length}</strong> 門課程</span>` +
-    `<a class="stat-link" href="#/articles" id="stat-articles" hidden>${ICON.fileText} 共 <strong></strong> 篇文章</a>` +
+    (BLOG_ON ? `<a class="stat-link" href="#/articles" id="stat-articles" hidden>${ICON.fileText} 共 <strong></strong> 篇文章</a>` : '') +
     (learners > 0 ? `<span>${ICON.usersRound} 共 <strong>${learners.toLocaleString()}</strong> 人加入學習</span>` : '') + '</p>' +
-    '<input class="input search" id="q" type="search" placeholder="搜尋課程或文章…" aria-label="搜尋課程或文章" autocomplete="off" />' +
+    `<input class="input search" id="q" type="search" placeholder="${BLOG_ON ? '搜尋課程或文章…' : '搜尋課程…'}" aria-label="${BLOG_ON ? '搜尋課程或文章' : '搜尋課程'}" autocomplete="off" />` +
     '</div></section>' +
     '<section class="container"><div class="row-between map-head"><h2>學習地圖</h2>' +
     '<span class="view-switch" role="group" aria-label="顯示方式"><button type="button" data-hview="map">🚇 路線圖</button><button type="button" data-hview="grid">▦ 方格</button></span></div>' +
@@ -844,7 +846,7 @@ pages.home = (app) => {
     box.hidden = false;
   });
   // 最新文章（有發布的文章才顯示）
-  loadBlog().then((list) => {
+  if (BLOG_ON) loadBlog().then((list) => {
     // 首頁統計：已發布的文章數
     posts = list.filter((a) => a.published);
     if (q) draw();
@@ -893,6 +895,7 @@ const blogCard = (a) =>
   '</div></a>';
 
 pages.articles = async (app) => {
+  if (!BLOG_ON) return go('/'); // 文章功能關閉：舊連結回到首頁
   app.innerHTML = '<div class="container"><p class="muted">載入文章中…</p></div>';
   const list = await loadBlog();
   if (!document.body.contains(app)) return;
@@ -919,6 +922,7 @@ pages.articles = async (app) => {
 };
 
 pages.article = async (app, id) => {
+  if (!BLOG_ON) return go('/');
   app.innerHTML = '<div class="container"><p class="muted">載入文章中…</p></div>';
   await loadBlog();
   let a = findPost(id);
@@ -3096,6 +3100,7 @@ pages.admin = async (app, id, query, sub) => {
   if (!adminGuard(app)) return;
   if (id === 'students') return pages.students(app);
   if (id === 'playlist') return pages.playlist(app);
+  if (!BLOG_ON && (id === 'articles' || id === 'article')) return go('/admin');
   if (id === 'articles') return pages.blogAdmin(app);
   if (id === 'events') return pages.eventAdmin(app);
   if (id === 'event') return pages.eventEdit(app, sub, query);
@@ -3114,7 +3119,7 @@ pages.admin = async (app, id, query, sub) => {
     '</div></div>';
   const groups = groupCourses(courses);
   app.innerHTML = '<div class="container wide">' + adminTabs('courses') + '<div class="row-between"><h1>課程管理</h1><span class="lesson-nav">' +
-    '<a class="btn btn-ghost btn-sm" href="#/admin/playlist">▶ 從播放清單建立</a><a class="btn btn-sm" href="#/admin/new">＋ 新增課程</a><a class="btn btn-sm" href="#/admin/article/new">＋ 新增文章</a><a class="btn btn-sm" href="#/admin/event/new">＋ 新增活動</a></span></div>' +
+    '<a class="btn btn-ghost btn-sm" href="#/admin/playlist">▶ 從播放清單建立</a><a class="btn btn-sm" href="#/admin/new">＋ 新增課程</a>' + (BLOG_ON ? '<a class="btn btn-sm" href="#/admin/article/new">＋ 新增文章</a>' : '') + '<a class="btn btn-sm" href="#/admin/event/new">＋ 新增活動</a></span></div>' +
     (coursesFromDb ? '' :
       '<div class="card pad notice-card"><strong>第一次使用：請先匯入課程</strong><p class="muted small">目前的課程資料來自網站內建檔案。按下面的按鈕把課程匯入資料庫後，就能在網站上直接編輯。</p>' +
       '<button class="btn btn-sm" id="import">匯入現有課程到資料庫</button></div>') +
@@ -3332,7 +3337,7 @@ function applySuggestedMap() {
 
 const adminTabs = (cur) => '<div class="chips admin-tabs">' +
   `<a class="chip${cur === 'courses' ? ' active' : ''}" href="#/admin">課程管理（順序 = 學習地圖的階段）</a>` +
-  `<a class="chip${cur === 'articles' ? ' active' : ''}" href="#/admin/articles">文章管理</a>` +
+  (BLOG_ON ? `<a class="chip${cur === 'articles' ? ' active' : ''}" href="#/admin/articles">文章管理</a>` : '') +
   `<a class="chip${cur === 'events' ? ' active' : ''}" href="#/admin/events">行事曆</a>` +
   `<a class="chip${cur === 'students' ? ' active' : ''}" href="#/admin/students">學生名單</a></div>`;
 
