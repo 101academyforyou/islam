@@ -682,8 +682,6 @@ body.no-select { user-select: none; }
 .mt-dot:hover { transform: scale(1.18); }
 .mt-st.done .mt-dot { background: var(--line); border-width: 3px; }
 .mt-st.going .mt-dot { background: color-mix(in srgb, var(--line) 25%, var(--card)); }
-.mt-st.transfer .mt-dot { border: 5px solid #1f2937; box-shadow: 0 0 0 3px var(--card), inset 0 0 0 3px var(--card), inset 0 0 0 8px var(--line); }
-.mt-st.transfer.done .mt-dot { background: var(--line); box-shadow: 0 0 0 3px var(--card); }
 .mt-st.here .mt-dot { position: relative; }
 .mt-label { display: flex; flex-direction: column; align-items: center; gap: 2px; text-decoration: none; color: inherit; max-width: 100%; }
 .mt-label:hover .mt-name { color: var(--line); }
