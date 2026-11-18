@@ -670,12 +670,11 @@ function metroHtml(path, joinBtn, width) {
     const st = g.list.map((c, i) => {
       const r = Math.floor(i / cols), k = i % cols, col = cols === 1 ? 1 : r % 2 ? cols - k : k + 1;
       const mine = owns(c.id), p = mine ? progress(c) : 0, state = mine && p === 100 ? 'done' : mine ? 'going' : '';
-      const first = gi === 0 && i === 0, last = gi === groups.length - 1 && i === g.list.length - 1;
+      const last = gi === groups.length - 1 && i === g.list.length - 1;
       const sid = code + String(i + 1).padStart(2, '0');
       return `<div class="mt-st ${state}${c === here ? ' here' : ''}${i === 0 && gi > 0 ? ' transfer' : ''}" style="grid-row:${r + 1};grid-column:${col}">` +
         `<a class="mt-dot" href="#/course/${c.id}" aria-label="${sid} ${esc(c.title)}">${state === 'done' ? '✓' : ''}</a>` +
         `<a class="mt-label" href="#/course/${c.id}">` +
-        (first ? '<span class="mt-end">🚩 起點</span>' : '') +
         (last && c !== here ? '<span class="mt-end">🏁 終點</span>' : '') +
         `<span class="mt-code">${sid}</span><strong class="mt-name">${esc(c.title)}</strong>` +
         `<span class="mt-meta">${lessonsOf(c).length} 個單元${mine ? ` · ${p === 100 ? '已完成' : `進度 ${p}%`}` : joinCount[c.id] > 0 ? ' · ' + countText(c) : ''}${c.published === false ? ' · 未上架' : ''}</span></a>` +
@@ -734,7 +733,7 @@ function bindMetro(wrap, rerender) {
 
 /* ---------------- 首頁：禮拜時間 ----------------
  * 在瀏覽器裡用天文公式計算（參考 PrayTimes.org；MWL 算法：晨禮 18°、宵禮 17°、晡禮沙斐儀派），不需要外部服務
- * 天氣用 Open-Meteo（免費、不用金鑰）；城市記在這台電腦，也可以用「我的位置」 */
+ * 城市記在這台電腦，也可以用「我的位置」 */
 const PT_CITIES = [['台北', 25.033, 121.565], ['新北', 25.012, 121.465], ['基隆', 25.128, 121.742], ['桃園', 24.993, 121.301], ['新竹', 24.804, 120.971],
   ['苗栗', 24.560, 120.821], ['台中', 24.147, 120.674], ['彰化', 24.081, 120.538], ['南投', 23.910, 120.684], ['雲林', 23.709, 120.431], ['嘉義', 23.480, 120.449],
   ['台南', 22.999, 120.227], ['高雄', 22.627, 120.301], ['屏東', 22.669, 120.486], ['宜蘭', 24.757, 121.753], ['花蓮', 23.987, 121.601], ['台東', 22.756, 121.144],
@@ -768,20 +767,14 @@ const ptMath = (() => {
   return { times };
 })();
 const ptHm = (h) => { const m = Math.round(h * 60); return pad2(Math.floor(m / 60) % 24) + ':' + pad2(m % 60); };
-const WEATHER_ICON = (c) => (c === 0 ? '☀️' : c <= 2 ? '🌤' : c === 3 ? '☁️' : c <= 48 ? '🌫' : c <= 67 || (c >= 80 && c <= 82) ? '🌧' : c <= 77 || c === 85 || c === 86 ? '🌨' : '⛈');
 function prayerWidget(box) {
   let place = null;
   try { place = JSON.parse(localStorage.getItem('isl_pt_place')); } catch (e) {}
   if (!place || typeof place.lat !== 'number') place = { name: '台北', lat: 25.033, lng: 121.565 };
   const tz = 8; // 台灣、香港都是 UTC+8；「我的位置」用這台裝置的時區
-  let weather = null, timer = 0;
+  let timer = 0;
   const tzOf = () => (place.mine ? -new Date().getTimezoneOffset() / 60 : tz);
   const dayTimes = (date) => ptMath.times(date.getFullYear(), date.getMonth() + 1, date.getDate(), place.lat, place.lng, tzOf());
-  const loadWeather = () => {
-    weather = null;
-    fetch(`https://api.open-meteo.com/v1/forecast?latitude=${place.lat}&longitude=${place.lng}&current=temperature_2m,relative_humidity_2m,weather_code&timezone=auto`)
-      .then((r) => (r.ok ? r.json() : null)).then((d) => { if (d && d.current) { weather = d.current; draw(); } }).catch(() => {});
-  };
   // 現在的狀態：下一拜、還剩幾秒
   function state() {
     const now = new Date(), nowH = now.getHours() + now.getMinutes() / 60 + now.getSeconds() / 3600;
@@ -811,7 +804,6 @@ function prayerWidget(box) {
     box.innerHTML = '<div class="pt-band"><div class="container">' +
       `<div class="pt-bar"><span class="pt-title">🕌 今日禮拜時間 <span class="pt-date">${today}</span></span><span class="pt-tools">` +
       `<label class="pt-chip" title="選擇城市">📍 <select aria-label="選擇城市">${PT_CITIES.map(([n]) => `<option ${!place.mine && n === place.name ? 'selected' : ''}>${n}</option>`).join('')}<option value="__me" ${place.mine ? 'selected' : ''}>${place.mine ? '我的位置' : '📍 使用我的位置'}</option></select></label>` +
-      (weather ? `<span class="pt-chip" title="目前天氣">${WEATHER_ICON(weather.weather_code)} ${Math.round(weather.temperature_2m)}° · 💧${Math.round(weather.relative_humidity_2m)}%</span>` : '') +
       '<button type="button" class="pt-chip pt-month">📅 本月時間表</button></span></div>' +
       '<div class="pt-circles">' + five.map(([k, n]) => `<div class="pt-c${k === next[0] ? ' next' : ''}${t[k] <= nowH && k !== next[0] && nowH < t.isha ? ' past' : ''}" title="${n} ${ptHm(t[k])}">` +
         `<b>${PT_EN[k]}</b><span>${n}</span><strong>${ptHm(t[k])}</strong></div>`).join('') + '</div>' +
@@ -831,7 +823,7 @@ function prayerWidget(box) {
     };
     box.querySelector('.pt-month').onclick = monthTable;
   }
-  const save = () => { try { localStorage.setItem('isl_pt_place', JSON.stringify(place)); } catch (e) {} loadWeather(); draw(); };
+  const save = () => { try { localStorage.setItem('isl_pt_place', JSON.stringify(place)); } catch (e) {} draw(); };
   function monthTable() {
     const now = new Date(), y = now.getFullYear(), m = now.getMonth(), days = new Date(y, m + 1, 0).getDate();
     const rows = [];
@@ -849,7 +841,6 @@ function prayerWidget(box) {
     document.body.appendChild(bx);
     const today = bx.querySelector('tr.today'); if (today) today.scrollIntoView({ block: 'center' });
   }
-  loadWeather();
   draw();
   timer = setInterval(tick, 1000);
 }
